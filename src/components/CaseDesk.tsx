@@ -1,6 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { CASES, AGENT_PIPELINE, type Case, type Severity } from "@/lib/cases-data";
+import { getCases, uploadTransactions, postDecision, getSarBlob, healthCheck } from "@/lib/api-client";
+import { findingToCase, findingToExtras } from "@/lib/backend-mapping";
 import {
   CASE_EXTRAS,
   AGENT_RULES,
@@ -28,7 +30,9 @@ import { AppHeader } from "@/components/AppHeader";
 //  ACCEPTED  — analyst confirmed the finding and took the recommended action
 //  DISMISSED — cleared; sinks to the bottom of the queue
 type Triage = "OPEN" | "ACCEPTED" | "DISMISSED";
-type WorkCase = Case & { triage: Triage };
+// backend_cluster_id tracks the original cluster_id from the Python backend
+// so we can send decisions and fetch SARs even when the frontend id differs.
+type WorkCase = Case & { triage: Triage; backend_cluster_id?: string };
 
 
 interface BreakdownSegment {
@@ -611,12 +615,14 @@ function CaseDetail({
   onAccept,
   onDismiss,
   onArchive,
+  onDownload,
 }: {
   c: Case;
   extras?: CaseExtras;
   onAccept: (id: string, reason: string) => void;
   onDismiss: (id: string, reason: string) => void;
   onArchive: (id: string) => void;
+  onDownload?: () => void;
 }) {
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [caseStatus, setCaseStatus] = useState<CaseStatus | undefined>(extras?.case_status);
@@ -648,8 +654,10 @@ function CaseDetail({
   // Archive = remove the case from the queue entirely.
   const onArchiveClick = () => onArchive(c.id);
 
-  const onDownload = () =>
-    append(`Analyst downloaded full case report for ${c.account_id} (PDF) — audit log + model reasoning included`);
+  const handleDownloadClick = () => {
+    append(`Analyst downloaded SAR for ${c.account_id} — audit log + model reasoning included`);
+    onDownload?.();
+  };
 
   return (
     <div className="flex h-full flex-col gap-6 overflow-y-auto">
@@ -718,11 +726,11 @@ function CaseDetail({
               <span className="font-semibold text-foreground">Filum — Case File</span> · ready to download
             </span>
             <button
-              onClick={onDownload}
+              onClick={handleDownloadClick}
               className="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-4 py-2 text-sm font-medium text-foreground shadow-sm transition-all duration-200 hover:bg-accent hover:shadow-md"
             >
               <ThreadGlyph className="h-3.5 w-3.5 text-muted-foreground" />
-              Download report
+              Download SAR
             </button>
           </div>
         </div>
@@ -1271,8 +1279,16 @@ export function CaseDesk() {
   const [extrasMap, setExtrasMap] = useState<Record<string, CaseExtras>>({ ...CASE_EXTRAS });
   const [addOpen, setAddOpen] = useState(false);
   const [importMsg, setImportMsg] = useState<string | null>(null);
+  const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
+  const [runBusy, setRunBusy] = useState(false);
+  const txnInputRef = useRef<HTMLInputElement>(null);
   const idCounter = useRef(CASES.length);
   const csvInputRef = useRef<HTMLInputElement>(null);
+
+  // Probe backend once on mount.
+  useEffect(() => {
+    healthCheck().then(setBackendOnline);
+  }, []);
 
   // Auto-dismiss the import toast.
   useEffect(() => {
@@ -1298,12 +1314,18 @@ export function CaseDesk() {
   };
 
   // Accept: confirm finding; case stays in queue, re-sorted as ACCEPTED.
-  const handleAccept = (id: string) =>
+  const handleAccept = (id: string) => {
+    const wc = cases.find((c) => c.id === id);
+    if (wc) syncDecision(wc, "approve");
     setCases((prev) => sortQueue(prev.map((c) => (c.id === id ? { ...c, triage: "ACCEPTED" } : c))));
+  };
 
   // Dismiss: clear the case and sink it to the bottom of the queue.
-  const handleDismiss = (id: string) =>
+  const handleDismiss = (id: string) => {
+    const wc = cases.find((c) => c.id === id);
+    if (wc) syncDecision(wc, "reject");
     setCases((prev) => sortQueue(prev.map((c) => (c.id === id ? { ...c, triage: "DISMISSED" } : c))));
+  };
 
   // Archive: drop the case entirely; select the next one in the queue.
   const handleArchive = (id: string) => {
@@ -1311,6 +1333,104 @@ export function CaseDesk() {
     setCases(next);
     if (id === selectedId) setSelectedId(next[0]?.id);
   };
+
+  // ── Backend integration ────────────────────────────────────────────────────
+
+  // Load backend findings into the queue (merging with existing cases).
+  const loadFromBackend = useCallback(async (findings: import("@/lib/api-client").BackendFinding[]) => {
+    if (!findings.length) return 0;
+    const newCases: WorkCase[] = findings.map((f) => ({
+      ...findingToCase(f),
+      triage: "OPEN" as Triage,
+      backend_cluster_id: f.cluster_id,
+    }));
+    const newExtras: Record<string, CaseExtras> = {};
+    findings.forEach((f) => { newExtras[f.cluster_id] = findingToExtras(f); });
+
+    setCases((prev) => {
+      // Replace any case whose id matches a backend cluster_id; add the rest.
+      const existingIds = new Set(findings.map((f) => f.cluster_id));
+      const kept = prev.filter((c) => !existingIds.has(c.id));
+      return sortQueue([...kept, ...newCases]);
+    });
+    setExtrasMap((m) => ({ ...m, ...newExtras }));
+    if (newCases[0]) setSelectedId(newCases[0].id);
+    return findings.length;
+  }, []);
+
+  // "Run analysis" — fetch from backend if online, else prompt to start it.
+  const handleRunAnalysis = async () => {
+    if (backendOnline === false) {
+      setImportMsg("Backend offline — start it with: cd underwire && uvicorn api.app:app --reload");
+      return;
+    }
+    setRunBusy(true);
+    setImportMsg("Fetching findings from Underwire backend…");
+    try {
+      const findings = await getCases();
+      if (!findings.length) {
+        setImportMsg("Backend has no findings yet — upload a transaction CSV first.");
+      } else {
+        const n = await loadFromBackend(findings);
+        setImportMsg(`Loaded ${n} backend finding${n !== 1 ? "s" : ""} into queue`);
+        setBackendOnline(true);
+      }
+    } finally {
+      setRunBusy(false);
+    }
+  };
+
+  // Upload raw transaction CSV to the backend for full ML analysis.
+  const onTxnCsvFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setRunBusy(true);
+    setImportMsg(`Uploading ${file.name} to Underwire backend…`);
+    try {
+      const result = await uploadTransactions(file);
+      if (!result) {
+        setImportMsg("Backend upload failed — is the backend running on port 8000?");
+        return;
+      }
+      const n = await loadFromBackend(result.cases ?? []);
+      setImportMsg(
+        `Analyzed ${result.n_transactions.toLocaleString()} transactions → ${n} findings (${result.n_escalated} escalated)`,
+      );
+      setBackendOnline(true);
+    } finally {
+      setRunBusy(false);
+    }
+  };
+
+  // Send analyst decision to backend (fire-and-forget; UI already updated).
+  const syncDecision = useCallback((workCase: WorkCase, decision: "approve" | "reject") => {
+    const cid = workCase.backend_cluster_id ?? workCase.id;
+    postDecision(cid, decision);
+  }, []);
+
+  // Download SAR from backend; fallback to a local text blob if offline.
+  const handleDownloadSar = useCallback(async (workCase: WorkCase) => {
+    const cid = workCase.backend_cluster_id ?? workCase.id;
+    const blob = await getSarBlob(cid);
+    if (blob) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `SAR_${cid.replace(/[^a-z0-9]/gi, "_")}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } else {
+      // Fallback: generate a minimal markdown blob locally.
+      const text = `# SAR — ${workCase.account_id}\n\n**Score:** ${workCase.fraud_prob}/100\n**Action:** ${workCase.recommended_action}\n\n**Reason:** ${workCase.reason}\n\n**Evidence:**\n${workCase.evidence.map((e) => `- ${e}`).join("\n")}\n`;
+      const url = URL.createObjectURL(new Blob([text], { type: "text/markdown" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `SAR_${workCase.account_id}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+  }, []);
 
   // Bulk-add parsed CSV rows to the queue in one batch.
   const handleImportCsv = (inputs: CaseInput[]) => {
@@ -1371,8 +1491,23 @@ export function CaseDesk() {
               </svg>
               Add case
             </button>
-            <button className="rounded-full bg-primary px-7 py-3 text-sm font-bold text-white shadow-md transition-all duration-200 hover:bg-primary-hover hover:shadow-lg hover:-translate-y-px active:translate-y-0">
-              Run analysis
+            <button
+              onClick={() => txnInputRef.current?.click()}
+              disabled={runBusy}
+              title="Upload raw bank transaction CSV to run Underwire ML detection"
+              className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-5 py-3 text-sm font-bold text-white shadow-sm transition-all duration-200 hover:bg-white/20 hover:-translate-y-px active:translate-y-0 disabled:opacity-50"
+            >
+              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" stroke="currentColor" strokeWidth="2.2">
+                <path d="M12 16V4m0 0L7 9m5-5l5 5M5 20h14" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              Transactions
+            </button>
+            <button
+              onClick={handleRunAnalysis}
+              disabled={runBusy}
+              className={`rounded-full px-7 py-3 text-sm font-bold text-white shadow-md transition-all duration-200 hover:shadow-lg hover:-translate-y-px active:translate-y-0 disabled:opacity-60 ${backendOnline === false ? "bg-severity-high hover:bg-severity-high" : "bg-primary hover:bg-primary-hover"}`}
+            >
+              {runBusy ? "Running…" : backendOnline === false ? "Backend offline" : "Run analysis"}
             </button>
           </>
         }
@@ -1383,6 +1518,15 @@ export function CaseDesk() {
         type="file"
         accept=".csv,text/csv"
         onChange={onCsvFile}
+        className="hidden"
+        aria-hidden
+      />
+      {/* Hidden file picker for raw bank transaction CSVs → backend analysis */}
+      <input
+        ref={txnInputRef}
+        type="file"
+        accept=".csv,text/csv"
+        onChange={onTxnCsvFile}
         className="hidden"
         aria-hidden
       />
@@ -1475,6 +1619,7 @@ export function CaseDesk() {
                 onAccept={handleAccept}
                 onDismiss={handleDismiss}
                 onArchive={handleArchive}
+                onDownload={() => handleDownloadSar(selected)}
               />
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-muted-foreground">

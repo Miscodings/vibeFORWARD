@@ -1,0 +1,22 @@
+{
+  "activeID" : "6CFC1184-6184-403F-90AD-1C36DAFB9F52",
+  "configurations" : [
+    {
+      "buildConfiguration" : "Debug",
+      "destination" : {
+        "myMac" : {
+
+        }
+      },
+      "environmentVariables" : {
+
+      },
+      "id" : "6CFC1184-6184-403F-90AD-1C36DAFB9F52",
+      "launchArguments" : [
+
+      ],
+      "name" : "Debug on My Mac",
+      "schemeName" : ""
+    }
+  ]
+}
