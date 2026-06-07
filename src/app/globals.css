@@ -8,6 +8,9 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: var(--radius);
+  --radius-3xl: var(--radius);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -46,74 +49,75 @@
   --color-rule-border: var(--rule-border);
 
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: var(--font-space-grotesk), var(--font-sans);
+  --font-mono: var(--font-ibm-plex-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 
 :root {
-  --radius: 1.25rem;
+  --radius: 0.5rem;
 
-  /* Warm off-white canvas (Klarna), ink text */
-  --background: oklch(0.972 0.006 75);         /* ~#FAF7F2 warm off-white */
-  --foreground: oklch(0.18 0.005 270);         /* ~#0E0E0F ink */
-  --ink: oklch(0.18 0.005 270);
-  --surface: oklch(1 0 0);                     /* #FFFFFF */
-  --surface-raised: oklch(1 0 0);
-  --header-bg: oklch(0.18 0.006 270);          /* ~#0F1115 near-black */
-  --blush: oklch(0.965 0.018 15);              /* ~#FFF1F4 soft blush */
+  /* Warm off-white canvas, deep ink text */
+  --background: #FAFAF8;
+  --foreground: #16181D;
+  --ink: #16181D;
+  --surface: #FFFFFF;
+  --surface-raised: #FFFFFF;
+  --header-bg: #16181D;
+  --blush: #F7EAE7;                            /* light tint of thread red, recommendation panel */
 
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.18 0.005 270);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.18 0.005 270);
+  --card: #FFFFFF;
+  --card-foreground: #16181D;
+  --popover: #FFFFFF;
+  --popover-foreground: #16181D;
 
-  /* Cobalt-violet primary #494FDF */
-  --primary: oklch(0.515 0.225 273);
-  --primary-foreground: oklch(0.99 0 0);
-  --primary-hover: oklch(0.455 0.225 273);
+  /* Deep institutional navy primary */
+  --primary: #1E3A5F;
+  --primary-foreground: #FAFAF8;
+  --primary-hover: #16294A;
 
-  --secondary: oklch(0.955 0.006 75);
-  --secondary-foreground: oklch(0.18 0.005 270);
-  --muted: oklch(0.955 0.006 75);
-  --muted-foreground: oklch(0.46 0.008 285);   /* warm gray ~#5A5A5F */
-  --accent: oklch(0.945 0.008 75);
-  --accent-foreground: oklch(0.18 0.005 270);
+  --secondary: #F1F0EA;
+  --secondary-foreground: #16181D;
+  --muted: #F1F0EA;
+  --muted-foreground: #5B6472;
+  --accent: #ECEAE3;
+  --accent-foreground: #16181D;
 
-  --destructive: oklch(0.55 0.22 27);
-  --destructive-foreground: oklch(0.99 0 0);
-  --border: oklch(0.915 0.01 75);              /* warm ~#EBE7E0 */
-  --input: oklch(0.915 0.01 75);
-  --ring: oklch(0.515 0.225 273);
+  --destructive: #C8503C;
+  --destructive-foreground: #FAFAF8;
+  --border: #E5E3DD;
+  --input: #E5E3DD;
+  --ring: #1E3A5F;
 
 
-  /* Severity (unchanged — functional) */
-  --severity-critical: oklch(0.50 0.22 27);
-  --severity-critical-bg: oklch(0.965 0.04 27);
-  --severity-high: oklch(0.55 0.16 65);
-  --severity-high-bg: oklch(0.97 0.05 80);
-  --severity-review: oklch(0.45 0.03 257);
-  --severity-review-bg: oklch(0.955 0.008 250);
+  /* Severity — thread red is the single accent, used for CRITICAL */
+  --severity-critical: #C8503C;
+  --severity-critical-bg: #F9EBE8;
+  --severity-high: #B07D2B;
+  --severity-high-bg: #F8F1E3;
+  --severity-review: #5B6472;
+  --severity-review-bg: #EEF0F2;
 
-  --success: oklch(0.62 0.16 145);
-  --warning: oklch(0.65 0.17 65);
+  --success: #4F7942;
+  --warning: #B07D2B;
 
-  --rule-bg: oklch(0.965 0.04 80);
-  --rule-border: oklch(0.78 0.13 75);
+  --rule-bg: #F8F1E3;
+  --rule-border: #D9C29A;
 
   /* Status stamps */
-  --stamp-amber: oklch(0.55 0.16 65);
-  --stamp-amber-bg: oklch(0.985 0.03 80);
-  --stamp-red: oklch(0.50 0.22 27);
-  --stamp-red-bg: oklch(0.985 0.03 27);
-  --stamp-green: oklch(0.50 0.15 145);
-  --stamp-green-bg: oklch(0.985 0.03 145);
-  --stamp-blue: oklch(0.515 0.225 273);
-  --stamp-blue-bg: oklch(0.985 0.02 273);
+  --stamp-amber: #B07D2B;
+  --stamp-amber-bg: #F8F1E3;
+  --stamp-red: #C8503C;
+  --stamp-red-bg: #F9EBE8;
+  --stamp-green: #4F7942;
+  --stamp-green-bg: #EBF1E8;
+  --stamp-blue: #1E3A5F;
+  --stamp-blue-bg: #E8EDF2;
 
   /* Source palette */
-  --source-blue: oklch(0.515 0.225 273);
-  --source-teal: oklch(0.58 0.10 195);
-  --source-slate: oklch(0.55 0.03 257);
+  --source-blue: #1E3A5F;
+  --source-teal: #4A7A78;
+  --source-slate: #5B6472;
 }
 
 

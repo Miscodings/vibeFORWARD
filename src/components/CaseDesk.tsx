@@ -200,6 +200,26 @@ function Mono({ children, className = "" }: { children: React.ReactNode; classNa
   return <span className={`num ${className}`}>{children}</span>;
 }
 
+// A circle of 12 dots connected by one continuous thread — the Filum mark.
+function ThreadGlyph({ className = "" }: { className?: string }) {
+  const dots = Array.from({ length: 12 }, (_, i) => {
+    const angle = (i / 12) * 2 * Math.PI - Math.PI / 2;
+    return {
+      x: (12 + 8 * Math.cos(angle)).toFixed(2),
+      y: (12 + 8 * Math.sin(angle)).toFixed(2),
+    };
+  });
+  const path = dots.map((d, i) => `${i === 0 ? "M" : "L"}${d.x} ${d.y}`).join(" ") + " Z";
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" aria-hidden>
+      <path d={path} stroke="currentColor" strokeWidth="1" strokeLinejoin="round" opacity="0.45" />
+      {dots.map((d, i) => (
+        <circle key={i} cx={d.x} cy={d.y} r="1.4" fill="currentColor" />
+      ))}
+    </svg>
+  );
+}
+
 function StatusStamp({ status, size = "md" }: { status: CaseStatus; size?: "sm" | "md" }) {
   const c = statusStampColor[status];
   const dims =
@@ -208,7 +228,7 @@ function StatusStamp({ status, size = "md" }: { status: CaseStatus; size?: "sm" 
       : "px-2.5 py-1 text-[11px] tracking-[0.2em]";
   return (
     <span
-      className={`inline-flex select-none items-center rounded-full border border-dashed font-semibold uppercase transition-all duration-200 ${dims}`}
+      className={`inline-flex select-none items-center gap-1.5 rounded-full border border-dashed font-semibold uppercase transition-all duration-200 ${dims}`}
       style={{
         color: c.fg,
         backgroundColor: c.bg,
@@ -216,6 +236,7 @@ function StatusStamp({ status, size = "md" }: { status: CaseStatus; size?: "sm" 
         transform: "rotate(-2deg)",
       }}
     >
+      <ThreadGlyph className="h-3 w-3" />
       {status}
     </span>
   );
@@ -282,7 +303,7 @@ function CaseCard({
   return (
     <button
       onClick={onClick}
-      className={`relative w-full overflow-hidden rounded-3xl border bg-surface p-6 text-left shadow-sm transition-all duration-200 hover:-translate-y-px hover:shadow-md ${
+      className={`relative w-full shrink-0 overflow-hidden rounded-3xl border bg-surface p-6 text-left shadow-sm transition-all duration-200 hover:-translate-y-px hover:shadow-md ${
         active
           ? "border-border before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:bg-primary before:content-['']"
           : "border-border hover:border-foreground/20"
@@ -303,7 +324,7 @@ function CaseCard({
           </span>
         </span>
       )}
-      <div className="flex flex-col gap-2 pl-2 pr-12">
+      <div className="flex flex-col gap-2.5 pl-2 pr-12">
         <div className="flex items-center justify-between gap-3">
           <Mono className="text-sm text-muted-foreground">{c.account_id}</Mono>
           <Mono className={`text-xl font-bold leading-none ${riskColor(c.fraud_prob)}`}>
@@ -314,7 +335,22 @@ function CaseCard({
           <Mono className="text-2xl font-bold text-foreground">{formatExposure(c.exposure)}</Mono>
           <SeverityBadge s={c.severity} />
         </div>
-        <p className="line-clamp-1 text-base leading-snug text-foreground/85">{c.reason}</p>
+        <p className="line-clamp-2 text-base leading-snug text-foreground/85">{c.reason}</p>
+
+        <div className="flex flex-col gap-1.5 border-t border-border/70 pt-2.5 text-xs text-muted-foreground">
+          <div className="flex items-center gap-1.5">
+            <span className="shrink-0 font-medium uppercase tracking-wide text-foreground/60">
+              Recommended
+            </span>
+            <span className="truncate text-foreground/85">{c.recommended_action}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="shrink-0 font-medium uppercase tracking-wide text-foreground/60">
+              Evaded
+            </span>
+            <Mono className="truncate text-[11px] text-foreground/85">{c.evaded_rule}</Mono>
+          </div>
+        </div>
       </div>
     </button>
   );
@@ -547,11 +583,14 @@ function CaseDetail({ c }: { c: Case }) {
             Dismiss
           </button>
           <div className="ml-auto flex items-center gap-2">
-            <span className="text-[11px] text-muted-foreground">Report ready to download</span>
+            <span className="text-[11px] text-muted-foreground">
+              <span className="font-semibold text-foreground">Filum — Case File</span> · ready to download
+            </span>
             <button
               onClick={onDownload}
-              className="rounded-full border border-border bg-surface px-4 py-2 text-sm font-medium text-foreground shadow-sm transition-all duration-200 hover:bg-accent hover:shadow-md"
+              className="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-4 py-2 text-sm font-medium text-foreground shadow-sm transition-all duration-200 hover:bg-accent hover:shadow-md"
             >
+              <ThreadGlyph className="h-3.5 w-3.5 text-muted-foreground" />
               Download report
             </button>
           </div>
@@ -671,6 +710,7 @@ export function CaseDesk() {
   );
   const [selectedId, setSelectedId] = useState(sorted[0].id);
   const selected = sorted.find((c) => c.id === selectedId) ?? sorted[0];
+  const [queueCollapsed, setQueueCollapsed] = useState(false);
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
@@ -683,11 +723,14 @@ export function CaseDesk() {
               </svg>
             </div>
             <div>
-              <h1 className="text-xl font-bold leading-tight tracking-tight text-white">
-                CASE<span className="text-primary">/</span>DESK
-              </h1>
+              <div className="flex items-baseline gap-2.5">
+                <h1 className="font-display text-[22px] font-semibold leading-tight tracking-[-0.02em] text-white underline decoration-2 decoration-[#C8503C] underline-offset-4">
+                  Filum
+                </h1>
+                <span className="text-sm text-white/50">Pull the thread.</span>
+              </div>
               <p className="text-xs leading-tight text-white/60">
-                <Mono>5,000</Mono> real bank transactions analyzed · findings verifiable against event benchmark
+                <Mono>5,000</Mono> real bank transactions · one hidden fraud ring · findings verifiable against the event&rsquo;s answer key
               </p>
             </div>
           </div>
@@ -708,29 +751,56 @@ export function CaseDesk() {
 
 
       <main className="mx-auto w-full max-w-[1600px] flex-1 min-h-0 overflow-hidden px-6 py-5">
-        <div className="grid h-full min-h-0 grid-cols-1 gap-5 lg:grid-cols-[36fr_40fr_24fr]">
-          <section className="flex h-full min-h-0 flex-col rounded-3xl border border-border bg-surface-raised p-6 shadow-sm transition-all duration-200">
-            <div className="mb-2 shrink-0 px-1">
-              <SeverityBreakdownCollapsed />
-            </div>
-
-            <div className="mb-2 flex shrink-0 items-center justify-between px-1">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        <div
+          className={`grid h-full min-h-0 grid-cols-1 gap-5 ${
+            queueCollapsed ? "lg:grid-cols-[88px_minmax(0,40fr)_24fr]" : "lg:grid-cols-[36fr_40fr_24fr]"
+          }`}
+        >
+          {queueCollapsed ? (
+            <button
+              onClick={() => setQueueCollapsed(false)}
+              aria-label="Expand case queue"
+              className="flex h-full min-h-0 w-full flex-col items-center gap-4 rounded-3xl border border-border bg-surface-raised py-6 text-muted-foreground shadow-sm transition-all duration-200 hover:text-foreground"
+            >
+              <span className="text-base">▸</span>
+              <span className="[writing-mode:vertical-rl] text-xs font-semibold uppercase tracking-wider">
                 Case Queue
-              </h2>
-              <span className="text-[11px] text-muted-foreground">worst first</span>
-            </div>
-            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
-              {sorted.map((c) => (
-                <CaseCard
-                  key={c.id}
-                  c={c}
-                  active={c.id === selectedId}
-                  onClick={() => setSelectedId(c.id)}
-                />
-              ))}
-            </div>
-          </section>
+              </span>
+              <Mono className="text-xs">{sorted.length}</Mono>
+            </button>
+          ) : (
+            <section className="flex h-full min-h-0 flex-col rounded-3xl border border-border bg-surface-raised p-6 shadow-sm transition-all duration-200">
+              <div className="mb-2 shrink-0 px-1">
+                <SeverityBreakdownCollapsed />
+              </div>
+
+              <div className="mb-2 flex shrink-0 items-center justify-between px-1">
+                <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Case Queue
+                </h2>
+                <div className="flex items-center gap-3">
+                  <span className="text-[11px] text-muted-foreground">worst first</span>
+                  <button
+                    onClick={() => setQueueCollapsed(true)}
+                    aria-label="Collapse case queue"
+                    className="flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition-colors duration-200 hover:bg-secondary hover:text-foreground"
+                  >
+                    ◂
+                  </button>
+                </div>
+              </div>
+              <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
+                {sorted.map((c) => (
+                  <CaseCard
+                    key={c.id}
+                    c={c}
+                    active={c.id === selectedId}
+                    onClick={() => setSelectedId(c.id)}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
 
           <section className="h-full min-h-0 overflow-hidden rounded-3xl border border-border bg-surface p-6 shadow-sm transition-all duration-200">
             <CaseDetail c={selected} />
