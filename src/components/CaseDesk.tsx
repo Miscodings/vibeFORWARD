@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { CASES, AGENT_PIPELINE, type Case, type Severity } from "@/lib/cases-data";
 import {
@@ -6,12 +6,29 @@ import {
   AGENT_RULES,
   exhibitLabel,
   type AuditEntry,
+  type CaseExtras,
   type CaseStatus,
 } from "@/lib/cases-extras";
+import { buildReasoning, synthesizeExtras, type ScoreFactor } from "@/lib/case-reasoning";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { AppHeader } from "@/components/AppHeader";
+
+// Triage lifecycle for a case in the live queue.
+//  OPEN      — awaiting a decision (sorts to the top)
+//  ACCEPTED  — analyst confirmed the finding and took the recommended action
+//  DISMISSED — cleared; sinks to the bottom of the queue
+type Triage = "OPEN" | "ACCEPTED" | "DISMISSED";
+type WorkCase = Case & { triage: Triage };
 
 
 interface BreakdownSegment {
@@ -189,15 +206,6 @@ const statusStampColor: Record<CaseStatus, { fg: string; bg: string }> = {
 const riskColor = (n: number) =>
   n >= 80 ? "text-severity-critical" : n >= 50 ? "text-severity-high" : "text-severity-review";
 
-type RecKey = "escalate" | "flag" | "dismiss";
-const recommendedKey = (rec: string): RecKey => {
-  const r = rec.toLowerCase();
-  if (/(escalat|freeze|sar)/.test(r)) return "escalate";
-  if (/(flag|review|hold|block|suspend|step-up|reverse)/.test(r)) return "flag";
-  return "dismiss";
-};
-
-
 function Mono({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return <span className={`num ${className}`}>{children}</span>;
 }
@@ -284,14 +292,15 @@ function SlaChip({ hours }: { hours: number }) {
 
 function CaseCard({
   c,
+  extras,
   active,
   onClick,
 }: {
-  c: Case;
+  c: WorkCase;
+  extras?: CaseExtras;
   active: boolean;
   onClick: () => void;
 }) {
-  const extras = CASE_EXTRAS[c.id];
   return (
     <button
       onClick={onClick}
@@ -318,7 +327,20 @@ function CaseCard({
       )}
       <div className="flex flex-col gap-1.5 pl-1.5 pr-9">
         <div className="flex items-center justify-between gap-2">
-          <Mono className="text-xs text-muted-foreground">{c.account_id}</Mono>
+          <span className="flex items-center gap-1.5">
+            <Mono className="text-xs text-muted-foreground">{c.account_id}</Mono>
+            {c.triage !== "OPEN" && (
+              <span
+                className={`rounded-full px-1.5 py-0.5 text-[8.5px] font-bold uppercase tracking-wide ${
+                  c.triage === "ACCEPTED"
+                    ? "bg-[color:var(--stamp-green-bg)] text-[color:var(--stamp-green)]"
+                    : "bg-secondary text-muted-foreground"
+                }`}
+              >
+                {c.triage}
+              </span>
+            )}
+          </span>
           <Mono className={`text-base font-bold leading-none ${riskColor(c.fraud_prob)}`}>
             {c.fraud_prob}
           </Mono>
@@ -374,8 +396,7 @@ function FraudBar({ prob, ci }: { prob: number; ci: [number, number] }) {
   );
 }
 
-function RulesRow({ c }: { c: Case }) {
-  const extras = CASE_EXTRAS[c.id];
+function RulesRow({ extras }: { extras?: CaseExtras }) {
   if (!extras) return null;
   return (
     <section>
@@ -416,9 +437,8 @@ function RulesRow({ c }: { c: Case }) {
 }
 
 
-function MoneyFlowTimeline({ c }: { c: Case }) {
-  const extras = CASE_EXTRAS[c.id];
-  if (!extras) return null;
+function MoneyFlowTimeline({ extras }: { extras?: CaseExtras }) {
+  if (!extras || extras.flow.length === 0) return null;
   const nodes = extras.flow;
   return (
     <section>
@@ -483,20 +503,121 @@ function AuditLogList({ entries }: { entries: AuditEntry[] }) {
 
 
 
+// ---- Reasoning: make every algorithmic decision legible to the analyst ----
+
+function FactorRow({ f, max }: { f: ScoreFactor; max: number }) {
+  const negative = f.points < 0;
+  const width = max > 0 ? (Math.abs(f.points) / max) * 100 : 0;
+  return (
+    <li className="flex flex-col gap-1 py-1.5">
+      <div className="flex items-baseline justify-between gap-3">
+        <span className="text-sm font-medium text-foreground">{f.label}</span>
+        <Mono
+          className={`shrink-0 text-sm font-bold tabular-nums ${
+            negative ? "text-severity-review" : "text-severity-critical"
+          }`}
+        >
+          {negative ? "" : "+"}
+          {f.points}
+        </Mono>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+        <div
+          className={`h-full rounded-full transition-[width] duration-500 ${
+            negative ? "bg-severity-review/50" : "bg-severity-critical/70"
+          }`}
+          style={{ width: `${width}%` }}
+        />
+      </div>
+      <p className="text-xs leading-snug text-muted-foreground">{f.detail}</p>
+    </li>
+  );
+}
+
+function ReasoningPanel({ c, extras }: { c: Case; extras?: CaseExtras }) {
+  const r = useMemo(() => buildReasoning(c, extras), [c, extras]);
+  const max = Math.max(r.baseline, ...r.factors.map((f) => Math.abs(f.points)));
+
+  return (
+    <section className="rounded-3xl border border-rule-border bg-rule-bg/60 p-5 shadow-sm transition-all duration-200">
+      <div className="flex items-center gap-2">
+        <ThreadGlyph className="h-4 w-4 text-severity-high" />
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Why the model flagged this
+        </h3>
+      </div>
+
+      <p className="mt-2 text-sm leading-relaxed text-foreground/90">{r.headline}</p>
+
+      <div className="mt-4 rounded-2xl border border-border bg-surface p-4">
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          How the RISK {r.total} score was built
+        </p>
+        <ul className="divide-y divide-border/60">
+          <li className="flex items-baseline justify-between gap-3 py-1.5">
+            <span className="text-sm font-medium text-foreground">Population baseline</span>
+            <Mono className="shrink-0 text-sm font-bold tabular-nums text-muted-foreground">
+              {r.baseline}
+            </Mono>
+          </li>
+          {r.factors.map((f) => (
+            <FactorRow key={f.label} f={f} max={max} />
+          ))}
+        </ul>
+        <div className="mt-2 flex items-baseline justify-between gap-3 border-t-2 border-foreground/20 pt-2">
+          <span className="text-sm font-bold uppercase tracking-wide text-foreground">
+            Final risk score
+          </span>
+          <Mono className={`shrink-0 text-xl font-bold tabular-nums ${riskColor(r.total)}`}>
+            {r.total}/100
+          </Mono>
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+        <div className="rounded-2xl border border-border bg-surface px-3 py-2.5">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Confidence
+          </p>
+          <p className="mt-1 text-xs leading-snug text-foreground/85">{r.confidenceNote}</p>
+        </div>
+        <div className="rounded-2xl border border-border bg-surface px-3 py-2.5">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            How it evaded detection
+          </p>
+          <p className="mt-1 text-xs leading-snug text-foreground/85">{r.evasionNote}</p>
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-2xl border-l-4 border-primary/50 bg-primary/5 px-3 py-2.5">
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-primary">
+          Why this action is recommended
+        </p>
+        <p className="mt-1 text-xs leading-snug text-foreground/90">{r.actionRationale}</p>
+      </div>
+    </section>
+  );
+}
+
 const nowStamp = () => {
   const d = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 };
 
-const recLabel: Record<RecKey, string> = {
-  escalate: "Escalate",
-  flag: "Flag for Review",
-  dismiss: "Dismiss",
-};
-
-function CaseDetail({ c }: { c: Case }) {
-  const extras = CASE_EXTRAS[c.id];
+function CaseDetail({
+  c,
+  extras,
+  onAccept,
+  onDismiss,
+  onArchive,
+}: {
+  c: Case;
+  extras?: CaseExtras;
+  onAccept: (id: string, reason: string) => void;
+  onDismiss: (id: string, reason: string) => void;
+  onArchive: (id: string) => void;
+}) {
   const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [caseStatus, setCaseStatus] = useState<CaseStatus | undefined>(extras?.case_status);
 
@@ -509,23 +630,26 @@ function CaseDetail({ c }: { c: Case }) {
   const append = (text: string) =>
     setAudit((prev) => [{ time: nowStamp(), text }, ...prev]);
 
-  const onEscalate = () => {
-    setCaseStatus("ESCALATED");
-    append(`Analyst escalated ${c.account_id} — recommendation: ${c.recommended_action}`);
+  // Accept = confirm the finding and take the model's recommended action.
+  const onAcceptClick = () => {
+    const isFreeze = /(freeze|sar|hold|suspend|block|reverse)/i.test(c.recommended_action);
+    const note = `Analyst accepted ${c.account_id} — actioned "${c.recommended_action}" (${c.action_reason})`;
+    setCaseStatus(isFreeze ? "FROZEN" : "ESCALATED");
+    append(note);
+    onAccept(c.id, note);
   };
-  const onFlag = () => {
-    setCaseStatus("UNDER REVIEW");
-    append(`Analyst flagged ${c.account_id} for review — ${c.action_reason}`);
-  };
-  const onDismiss = () => {
+  // Dismiss = clear the case; it sinks to the bottom of the queue.
+  const onDismissClick = () => {
+    const note = `Analyst dismissed ${c.account_id} — cleared, moved to bottom of queue`;
     setCaseStatus("CLEARED");
-    append(`Analyst dismissed ${c.account_id} — no action taken`);
+    append(note);
+    onDismiss(c.id, note);
   };
-  const onDownload = () =>
-    append(`Analyst downloaded full case report for ${c.account_id} (PDF) — audit log included`);
+  // Archive = remove the case from the queue entirely.
+  const onArchiveClick = () => onArchive(c.id);
 
-  const recKey = recommendedKey(c.recommended_action);
-  const rec = (k: RecKey) => (recKey === k ? "ring-2 ring-primary/40" : "");
+  const onDownload = () =>
+    append(`Analyst downloaded full case report for ${c.account_id} (PDF) — audit log + model reasoning included`);
 
   return (
     <div className="flex h-full flex-col gap-6 overflow-y-auto">
@@ -555,33 +679,39 @@ function CaseDetail({ c }: { c: Case }) {
         </div>
       </section>
 
-      {/* 2. Recommendation card — decision zone */}
+      {/* 2. Reasoning — always visible: every decision the model made, explained */}
+      <ReasoningPanel c={c} extras={extras} />
+
+      {/* 3. Recommendation card — decision zone */}
       <section className="rounded-3xl border border-border bg-[color:var(--color-blush)] p-6 text-ink shadow-sm transition-all duration-200">
         <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           Recommended next step
         </p>
         <p className="mb-4 text-sm text-ink/85">
-          <span className="font-semibold text-ink">{recLabel[recKey]}</span>
+          <span className="font-semibold text-ink">{c.recommended_action}</span>
           <span className="text-muted-foreground"> — {c.action_reason}</span>
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={onEscalate}
-            className={`rounded-full bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground shadow-sm transition-all duration-200 hover:bg-primary-hover hover:shadow-md ${rec("escalate")}`}
+            onClick={onAcceptClick}
+            className="rounded-full bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground shadow-sm transition-all duration-200 hover:bg-primary-hover hover:shadow-md ring-2 ring-primary/40"
           >
-            Escalate
+            Accept
           </button>
           <button
-            onClick={onFlag}
-            className={`rounded-full border border-border bg-surface px-5 py-2.5 text-sm font-medium text-foreground shadow-sm transition-all duration-200 hover:bg-accent hover:shadow-md ${rec("flag")}`}
-          >
-            Flag for review
-          </button>
-          <button
-            onClick={onDismiss}
-            className={`rounded-full px-5 py-2.5 text-sm font-medium text-muted-foreground transition-all duration-200 hover:bg-accent hover:text-foreground ${rec("dismiss")}`}
+            onClick={onDismissClick}
+            className="rounded-full border border-border bg-surface px-5 py-2.5 text-sm font-medium text-foreground shadow-sm transition-all duration-200 hover:bg-accent hover:shadow-md"
           >
             Dismiss
+          </button>
+          <button
+            onClick={onArchiveClick}
+            className="inline-flex items-center gap-1.5 rounded-full border border-severity-critical/30 bg-severity-critical-bg px-5 py-2.5 text-sm font-medium text-severity-critical transition-all duration-200 hover:bg-severity-critical hover:text-white"
+          >
+            <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" stroke="currentColor" strokeWidth="2">
+              <path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Archive
           </button>
           <div className="ml-auto flex items-center gap-2">
             <span className="text-[11px] text-muted-foreground">
@@ -596,9 +726,14 @@ function CaseDetail({ c }: { c: Case }) {
             </button>
           </div>
         </div>
+        <p className="mt-3 text-[11px] leading-snug text-muted-foreground">
+          <span className="font-semibold text-foreground">Accept</span> confirms the finding and logs the recommended action ·{" "}
+          <span className="font-semibold text-foreground">Dismiss</span> clears it and sends it to the bottom of the queue ·{" "}
+          <span className="font-semibold text-foreground">Archive</span> removes it from the queue entirely.
+        </p>
       </section>
 
-      {/* 3. Tabs */}
+      {/* 4. Tabs */}
       <Tabs defaultValue="evidence" className="w-full">
         <TabsList className="rounded-full bg-secondary p-1">
           <TabsTrigger value="evidence" className="rounded-full px-4 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:shadow-sm">Evidence</TabsTrigger>
@@ -608,7 +743,7 @@ function CaseDetail({ c }: { c: Case }) {
 
 
         <TabsContent value="evidence" className="flex flex-col gap-5 pt-4">
-          <RulesRow c={c} />
+          <RulesRow extras={extras} />
           <section>
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Exhibit List
@@ -631,7 +766,7 @@ function CaseDetail({ c }: { c: Case }) {
         </TabsContent>
 
         <TabsContent value="flow" className="pt-4">
-          <MoneyFlowTimeline c={c} />
+          <MoneyFlowTimeline extras={extras} />
         </TabsContent>
 
         <TabsContent value="audit" className="pt-4">
@@ -700,28 +835,360 @@ function AgentPipeline() {
 }
 
 
-export function CaseDesk() {
-  const sorted = useMemo(
-    () =>
-      [...CASES].sort((a, b) => {
-        const rank = { CRITICAL: 0, HIGH: 1, REVIEW: 2 } as const;
-        return rank[a.severity] - rank[b.severity] || b.exposure - a.exposure;
-      }),
-    [],
+// ---------------------------------------------------------------------------
+// Add-case intake form. Everything the dashboard needs for a new case is
+// captured here and turned into a live queue entry + its reasoning/extras.
+// ---------------------------------------------------------------------------
+
+interface NewCasePayload {
+  caseData: Case;
+  extras: CaseExtras;
+}
+
+const SEVERITY_OPTIONS: Severity[] = ["CRITICAL", "HIGH", "REVIEW"];
+
+const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
+const clampInt = (v: string, lo: number, hi: number, fallback: number) => {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? clamp(n, lo, hi) : fallback;
+};
+
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {label}
+        {hint && <span className="ml-1 font-normal normal-case tracking-normal text-muted-foreground/70">— {hint}</span>}
+      </span>
+      {children}
+    </label>
   );
-  const [selectedId, setSelectedId] = useState(sorted[0].id);
+}
+
+const inputCls =
+  "w-full rounded-xl border border-border bg-surface px-3 py-2 text-sm text-foreground shadow-sm outline-none transition-colors duration-200 placeholder:text-muted-foreground/60 focus:border-primary/60 focus:ring-2 focus:ring-primary/20";
+
+function AddCaseDialog({
+  open,
+  onOpenChange,
+  onCreate,
+  nextId,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  onCreate: (p: NewCasePayload) => void;
+  nextId: () => string;
+}) {
+  const blank = {
+    account_id: "",
+    severity: "HIGH" as Severity,
+    exposure: "",
+    reason: "",
+    recommended_action: "",
+    action_reason: "",
+    evaded_rule: "",
+    fraud_prob: "60",
+    evidence: "",
+    triggered_rules: "",
+    sla_hours: "48",
+    counterparty: "",
+  };
+  const [form, setForm] = useState(blank);
+  const set = (k: keyof typeof blank, v: string) =>
+    setForm((f) => ({ ...f, [k]: v }) as typeof blank);
+
+  const reset = () => setForm(blank);
+  const valid = form.account_id.trim() && form.reason.trim() && form.exposure.trim();
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!valid) return;
+    const id = nextId();
+    const prob = clampInt(form.fraud_prob, 0, 100, 60);
+    const exposure = Math.max(0, parseInt(form.exposure, 10) || 0);
+    const evidence = form.evidence
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const triggered = form.triggered_rules
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    const caseData: Case = {
+      id,
+      account_id: form.account_id.trim(),
+      severity: form.severity,
+      exposure,
+      reason: form.reason.trim(),
+      evidence: evidence.length ? evidence : ["Manually entered case — no structured evidence attached yet."],
+      evaded_rule: form.evaded_rule.trim() || "none specified",
+      fraud_prob: prob,
+      fraud_ci: [clamp(prob - 8, 0, 100), clamp(prob + 6, 0, 100)],
+      recommended_action: form.recommended_action.trim() || "Flag for manual review",
+      action_reason: form.action_reason.trim() || "analyst-created case",
+      status: "open",
+    };
+
+    const extras = synthesizeExtras({
+      account_id: caseData.account_id,
+      exposure,
+      triggered_rules: triggered,
+      evaded_rule: caseData.evaded_rule,
+      sla_hours: clampInt(form.sla_hours, 1, 999, 48),
+      flowCounterparty: form.counterparty.trim() || undefined,
+      stamp: nowStamp(),
+    });
+
+    onCreate({ caseData, extras });
+    reset();
+    onOpenChange(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Add case to queue</DialogTitle>
+          <DialogDescription>
+            Enter the case details. The dashboard generates the risk reasoning, rules, and audit
+            trail automatically — the new case drops straight into the live queue.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={submit} className="flex max-h-[60vh] flex-col gap-3 overflow-y-auto pr-1">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Account ID">
+              <input
+                className={inputCls}
+                value={form.account_id}
+                onChange={(e) => set("account_id", e.target.value)}
+                placeholder="ACC-0000"
+                required
+              />
+            </Field>
+            <Field label="Severity">
+              <select
+                className={inputCls}
+                value={form.severity}
+                onChange={(e) => set("severity", e.target.value)}
+              >
+                {SEVERITY_OPTIONS.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Exposure ($)">
+              <input
+                className={inputCls}
+                type="number"
+                min={0}
+                value={form.exposure}
+                onChange={(e) => set("exposure", e.target.value)}
+                placeholder="25000"
+                required
+              />
+            </Field>
+            <Field label="Risk score" hint="0–100">
+              <input
+                className={inputCls}
+                type="number"
+                min={0}
+                max={100}
+                value={form.fraud_prob}
+                onChange={(e) => set("fraud_prob", e.target.value)}
+              />
+            </Field>
+          </div>
+
+          <Field label="Reason" hint="one line — why it's flagged">
+            <input
+              className={inputCls}
+              value={form.reason}
+              onChange={(e) => set("reason", e.target.value)}
+              placeholder="Mule account receiving layered deposits"
+              required
+            />
+          </Field>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Recommended action">
+              <input
+                className={inputCls}
+                value={form.recommended_action}
+                onChange={(e) => set("recommended_action", e.target.value)}
+                placeholder="Freeze account"
+              />
+            </Field>
+            <Field label="Action reason">
+              <input
+                className={inputCls}
+                value={form.action_reason}
+                onChange={(e) => set("action_reason", e.target.value)}
+                placeholder="confirmed mule"
+              />
+            </Field>
+          </div>
+
+          <Field label="Evaded rule" hint="control it slipped past">
+            <input
+              className={inputCls}
+              value={form.evaded_rule}
+              onChange={(e) => set("evaded_rule", e.target.value)}
+              placeholder="structuring below alert threshold"
+            />
+          </Field>
+
+          <Field label="Triggered rules" hint="comma-separated">
+            <input
+              className={inputCls}
+              value={form.triggered_rules}
+              onChange={(e) => set("triggered_rules", e.target.value)}
+              placeholder="VELOCITY-04, MULE-IO-07"
+            />
+          </Field>
+
+          <Field label="Evidence" hint="one item per line">
+            <textarea
+              className={`${inputCls} min-h-[72px] resize-y`}
+              value={form.evidence}
+              onChange={(e) => set("evidence", e.target.value)}
+              placeholder={"11 inbound transfers totaling $64,200 within 72h\nAccount opened 19 days ago"}
+            />
+          </Field>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="SLA hours" hint="to deadline">
+              <input
+                className={inputCls}
+                type="number"
+                min={1}
+                value={form.sla_hours}
+                onChange={(e) => set("sla_hours", e.target.value)}
+              />
+            </Field>
+            <Field label="Flow counterparty" hint="optional">
+              <input
+                className={inputCls}
+                value={form.counterparty}
+                onChange={(e) => set("counterparty", e.target.value)}
+                placeholder="ACC-4471"
+              />
+            </Field>
+          </div>
+
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              className="rounded-full border border-border bg-surface px-5 py-2.5 text-sm font-medium text-foreground shadow-sm transition-all duration-200 hover:bg-accent"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={!valid}
+              className="rounded-full bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground shadow-sm transition-all duration-200 hover:bg-primary-hover hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Add to queue
+            </button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Sort: OPEN first, then ACCEPTED, then DISMISSED at the bottom; within each
+// triage group, worst-first by severity then exposure.
+const TRIAGE_RANK: Record<Triage, number> = { OPEN: 0, ACCEPTED: 1, DISMISSED: 2 };
+const SEV_RANK: Record<Severity, number> = { CRITICAL: 0, HIGH: 1, REVIEW: 2 };
+
+function sortQueue(cases: WorkCase[]): WorkCase[] {
+  return [...cases].sort(
+    (a, b) =>
+      TRIAGE_RANK[a.triage] - TRIAGE_RANK[b.triage] ||
+      SEV_RANK[a.severity] - SEV_RANK[b.severity] ||
+      b.exposure - a.exposure,
+  );
+}
+
+export function CaseDesk() {
+  // Live queue state, seeded from the static dataset.
+  const [cases, setCases] = useState<WorkCase[]>(() =>
+    sortQueue(CASES.map((c) => ({ ...c, triage: "OPEN" as Triage }))),
+  );
+  // Per-case dossier extras, seeded from the static map and extended for new cases.
+  const [extrasMap, setExtrasMap] = useState<Record<string, CaseExtras>>({ ...CASE_EXTRAS });
+  const [addOpen, setAddOpen] = useState(false);
+  const idCounter = useRef(CASES.length);
+
+  const sorted = useMemo(() => sortQueue(cases), [cases]);
+  const [selectedId, setSelectedId] = useState(sorted[0]?.id);
   const selected = sorted.find((c) => c.id === selectedId) ?? sorted[0];
   const [queueCollapsed, setQueueCollapsed] = useState(false);
+
+  const nextId = () => {
+    idCounter.current += 1;
+    return `c${idCounter.current}`;
+  };
+
+  const handleCreate = ({ caseData, extras }: NewCasePayload) => {
+    setExtrasMap((m) => ({ ...m, [caseData.id]: extras }));
+    setCases((prev) => sortQueue([...prev, { ...caseData, triage: "OPEN" }]));
+    setSelectedId(caseData.id);
+  };
+
+  // Accept: confirm finding; case stays in queue, re-sorted as ACCEPTED.
+  const handleAccept = (id: string) =>
+    setCases((prev) => sortQueue(prev.map((c) => (c.id === id ? { ...c, triage: "ACCEPTED" } : c))));
+
+  // Dismiss: clear the case and sink it to the bottom of the queue.
+  const handleDismiss = (id: string) =>
+    setCases((prev) => sortQueue(prev.map((c) => (c.id === id ? { ...c, triage: "DISMISSED" } : c))));
+
+  // Archive: drop the case entirely; select the next one in the queue.
+  const handleArchive = (id: string) => {
+    const next = sortQueue(cases.filter((c) => c.id !== id));
+    setCases(next);
+    if (id === selectedId) setSelectedId(next[0]?.id);
+  };
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
       <AppHeader
         actions={
-          <button className="rounded-full bg-primary px-7 py-3 text-sm font-bold text-white shadow-md transition-all duration-200 hover:bg-primary-hover hover:shadow-lg hover:-translate-y-px active:translate-y-0">
-            Run analysis
-          </button>
+          <>
+            <button
+              onClick={() => setAddOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-5 py-3 text-sm font-bold text-white shadow-sm transition-all duration-200 hover:bg-white/20 hover:-translate-y-px active:translate-y-0"
+            >
+              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" stroke="currentColor" strokeWidth="2.4">
+                <path d="M12 5v14M5 12h14" strokeLinecap="round" />
+              </svg>
+              Add case
+            </button>
+            <button className="rounded-full bg-primary px-7 py-3 text-sm font-bold text-white shadow-md transition-all duration-200 hover:bg-primary-hover hover:shadow-lg hover:-translate-y-px active:translate-y-0">
+              Run analysis
+            </button>
+          </>
         }
       />
+
+      <AddCaseDialog open={addOpen} onOpenChange={setAddOpen} onCreate={handleCreate} nextId={nextId} />
 
       <main className="mx-auto w-full max-w-[1600px] flex-1 min-h-0 overflow-hidden px-6 py-5">
         <div
@@ -763,20 +1230,53 @@ export function CaseDesk() {
                 </div>
               </div>
               <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto pr-1">
-                {sorted.map((c) => (
-                  <CaseCard
-                    key={c.id}
-                    c={c}
-                    active={c.id === selectedId}
-                    onClick={() => setSelectedId(c.id)}
-                  />
-                ))}
+                {sorted.length === 0 ? (
+                  <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
+                    <ThreadGlyph className="h-8 w-8 text-muted-foreground/50" />
+                    <p>Queue is empty.</p>
+                    <button
+                      onClick={() => setAddOpen(true)}
+                      className="mt-1 rounded-full border border-border bg-surface px-4 py-2 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+                    >
+                      + Add a case
+                    </button>
+                  </div>
+                ) : (
+                  sorted.map((c) => (
+                    <CaseCard
+                      key={c.id}
+                      c={c}
+                      extras={extrasMap[c.id]}
+                      active={c.id === selectedId}
+                      onClick={() => setSelectedId(c.id)}
+                    />
+                  ))
+                )}
               </div>
             </section>
           )}
 
           <section className="h-full min-h-0 overflow-hidden rounded-3xl border border-border bg-surface p-6 shadow-sm transition-all duration-200">
-            <CaseDetail c={selected} />
+            {selected ? (
+              <CaseDetail
+                c={selected}
+                extras={extrasMap[selected.id]}
+                onAccept={handleAccept}
+                onDismiss={handleDismiss}
+                onArchive={handleArchive}
+              />
+            ) : (
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-center text-muted-foreground">
+                <ThreadGlyph className="h-10 w-10 text-muted-foreground/40" />
+                <p className="text-sm">No case selected. Add a case to get started.</p>
+                <button
+                  onClick={() => setAddOpen(true)}
+                  className="rounded-full bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground shadow-sm transition-all duration-200 hover:bg-primary-hover"
+                >
+                  Add case
+                </button>
+              </div>
+            )}
           </section>
 
           <aside className="flex h-full min-h-0 flex-col overflow-y-auto rounded-3xl border border-border bg-surface-raised p-6 shadow-sm transition-all duration-200">
