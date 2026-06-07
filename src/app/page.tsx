@@ -1,7 +1,5 @@
-"use client";
-
-import { CaseDesk } from "@/components/CaseDesk";
+import { Landing } from "@/components/Landing";
 
 export default function Home() {
-  return <CaseDesk />;
+  return <Landing />;
 }

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { CASES, HEADER_STATS, AGENT_PIPELINE, type Case, type Severity } from "@/lib/cases-data";
 import {
   CASE_EXTRAS,
@@ -10,6 +11,9 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { AnimatedNumber } from "@/components/AnimatedNumber";
+import { ThemeToggle } from "@/components/ThemeToggle";
+import { AccountMenu } from "@/components/auth/AccountMenu";
 
 
 interface BreakdownSegment {
@@ -262,10 +266,24 @@ function StatChip({ value, label }: { value: string; label: string }) {
   );
 }
 
-function HeaderStatChip({ value, label }: { value: string; label: string }) {
+function HeaderStatChip({
+  label,
+  animate,
+  decimals,
+  prefix,
+  suffix,
+}: {
+  label: string;
+  animate: number;
+  decimals?: number;
+  prefix?: string;
+  suffix?: string;
+}) {
   return (
     <div className="flex flex-col px-3 leading-none">
-      <Mono className="text-2xl font-bold tracking-tight text-white leading-none">{value}</Mono>
+      <Mono className="text-2xl font-bold tracking-tight text-white leading-none">
+        <AnimatedNumber value={animate} decimals={decimals} prefix={prefix} suffix={suffix} />
+      </Mono>
       <span className="mt-1 text-[11px] uppercase tracking-wider text-white/60">{label}</span>
     </div>
   );
@@ -716,7 +734,7 @@ export function CaseDesk() {
     <div className="flex h-screen flex-col bg-background text-foreground">
       <header className="relative shrink-0 bg-[color:var(--color-header-bg)] text-white">
         <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-4 px-6 py-4">
-          <div className="flex items-center gap-3">
+          <Link href="/" className="flex items-center gap-3 transition-opacity duration-200 hover:opacity-80">
             <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm transition-all duration-200">
               <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" stroke="currentColor" strokeWidth="2.2">
                 <path d="M3 4h18v4H3zM3 12h12v8H3zM18 12h3v8h-3z" strokeLinejoin="round" />
@@ -733,17 +751,20 @@ export function CaseDesk() {
                 <Mono>5,000</Mono> real bank transactions · one hidden fraud ring · findings verifiable against the event&rsquo;s answer key
               </p>
             </div>
-          </div>
+          </Link>
 
-          <div className="ml-auto flex flex-wrap items-center gap-3">
+          <div className="ml-auto flex flex-wrap items-center gap-4">
             <div className="flex items-center gap-2">
-              <HeaderStatChip value={String(HEADER_STATS.flagged)} label="cases flagged" />
-              <HeaderStatChip value={HEADER_STATS.exposure} label="exposure" />
-              <HeaderStatChip value={String(HEADER_STATS.ring_accounts)} label="ring accounts" />
+              <HeaderStatChip label="cases flagged" animate={HEADER_STATS.flagged} />
+              <HeaderStatChip label="exposure" animate={412} prefix="$" suffix="K" />
+              <HeaderStatChip label="ring accounts" animate={HEADER_STATS.ring_accounts} />
             </div>
-            <button className="rounded-full bg-primary px-7 py-3 text-sm font-bold text-white shadow-md transition-all duration-200 hover:bg-primary-hover hover:shadow-lg">
+            <button className="rounded-full bg-primary px-7 py-3 text-sm font-bold text-white shadow-md transition-all duration-200 hover:bg-primary-hover hover:shadow-lg hover:-translate-y-px active:translate-y-0">
               Run analysis
             </button>
+            <div className="h-7 w-px bg-white/10" aria-hidden />
+            <ThemeToggle />
+            <AccountMenu />
           </div>
         </div>
         <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] bg-gradient-to-r from-primary to-transparent" />
