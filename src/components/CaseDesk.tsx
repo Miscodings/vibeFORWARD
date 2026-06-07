@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { CASES, HEADER_STATS, AGENT_PIPELINE, type Case, type Severity } from "@/lib/cases-data";
+import { CASES, AGENT_PIPELINE, type Case, type Severity } from "@/lib/cases-data";
 import {
   CASE_EXTRAS,
   AGENT_RULES,
@@ -11,9 +11,7 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { AnimatedNumber } from "@/components/AnimatedNumber";
-import { ThemeToggle } from "@/components/ThemeToggle";
-import { AccountMenu } from "@/components/auth/AccountMenu";
+import { AppHeader } from "@/components/AppHeader";
 
 
 interface BreakdownSegment {
@@ -266,30 +264,6 @@ function StatChip({ value, label }: { value: string; label: string }) {
   );
 }
 
-function HeaderStatChip({
-  label,
-  animate,
-  decimals,
-  prefix,
-  suffix,
-}: {
-  label: string;
-  animate: number;
-  decimals?: number;
-  prefix?: string;
-  suffix?: string;
-}) {
-  return (
-    <div className="flex flex-col px-3 leading-none">
-      <Mono className="text-2xl font-bold tracking-tight text-white leading-none">
-        <AnimatedNumber value={animate} decimals={decimals} prefix={prefix} suffix={suffix} />
-      </Mono>
-      <span className="mt-1 text-[11px] uppercase tracking-wider text-white/60">{label}</span>
-    </div>
-  );
-}
-
-
 function SlaChip({ hours }: { hours: number }) {
   const urgent = hours < 24;
   return (
@@ -321,7 +295,7 @@ function CaseCard({
   return (
     <button
       onClick={onClick}
-      className={`relative w-full shrink-0 overflow-hidden rounded-3xl border bg-surface p-6 text-left shadow-sm transition-all duration-200 hover:-translate-y-px hover:shadow-md ${
+      className={`relative w-full shrink-0 overflow-hidden rounded-2xl border bg-surface p-3.5 text-left shadow-sm transition-all duration-200 hover:-translate-y-px hover:shadow-md ${
         active
           ? "border-border before:absolute before:inset-y-0 before:left-0 before:w-[3px] before:bg-primary before:content-['']"
           : "border-border hover:border-foreground/20"
@@ -330,9 +304,9 @@ function CaseCard({
       <span className={`absolute left-0 top-0 h-full w-1 ${severityBar[c.severity]} ${active ? "opacity-0" : ""}`} />
 
       {extras && (
-        <span className="absolute right-3 top-3">
+        <span className="absolute right-2.5 top-2.5">
           <span
-            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] ${
+            className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9px] ${
               extras.sla_hours < 24
                 ? "border-severity-critical/30 bg-severity-critical-bg text-severity-critical"
                 : "border-border bg-secondary text-muted-foreground"
@@ -342,20 +316,20 @@ function CaseCard({
           </span>
         </span>
       )}
-      <div className="flex flex-col gap-2.5 pl-2 pr-12">
-        <div className="flex items-center justify-between gap-3">
-          <Mono className="text-sm text-muted-foreground">{c.account_id}</Mono>
-          <Mono className={`text-xl font-bold leading-none ${riskColor(c.fraud_prob)}`}>
+      <div className="flex flex-col gap-1.5 pl-1.5 pr-9">
+        <div className="flex items-center justify-between gap-2">
+          <Mono className="text-xs text-muted-foreground">{c.account_id}</Mono>
+          <Mono className={`text-base font-bold leading-none ${riskColor(c.fraud_prob)}`}>
             {c.fraud_prob}
           </Mono>
         </div>
-        <div className="flex items-center justify-between gap-3">
-          <Mono className="text-2xl font-bold text-foreground">{formatExposure(c.exposure)}</Mono>
+        <div className="flex items-center justify-between gap-2">
+          <Mono className="text-lg font-bold text-foreground">{formatExposure(c.exposure)}</Mono>
           <SeverityBadge s={c.severity} />
         </div>
-        <p className="line-clamp-2 text-base leading-snug text-foreground/85">{c.reason}</p>
+        <p className="line-clamp-2 text-sm leading-snug text-foreground/85">{c.reason}</p>
 
-        <div className="flex flex-col gap-1.5 border-t border-border/70 pt-2.5 text-xs text-muted-foreground">
+        <div className="flex flex-col gap-1 border-t border-border/70 pt-2 text-[11px] text-muted-foreground">
           <div className="flex items-center gap-1.5">
             <span className="shrink-0 font-medium uppercase tracking-wide text-foreground/60">
               Recommended
@@ -366,7 +340,7 @@ function CaseCard({
             <span className="shrink-0 font-medium uppercase tracking-wide text-foreground/60">
               Evaded
             </span>
-            <Mono className="truncate text-[11px] text-foreground/85">{c.evaded_rule}</Mono>
+            <Mono className="truncate text-[10px] text-foreground/85">{c.evaded_rule}</Mono>
           </div>
         </div>
       </div>
@@ -560,6 +534,15 @@ function CaseDetail({ c }: { c: Case }) {
         <div className="flex flex-wrap items-center gap-3">
           <Mono className="text-xl font-bold text-foreground">{c.account_id}</Mono>
           {caseStatus && <StatusStamp status={caseStatus} />}
+          <Link
+            href={`/visualize?case=${c.id}`}
+            className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-3.5 py-1.5 text-xs font-medium text-foreground shadow-sm transition-all duration-200 hover:-translate-y-px hover:bg-accent hover:shadow-md"
+          >
+            <svg viewBox="0 0 24 24" fill="none" className="h-3.5 w-3.5" stroke="currentColor" strokeWidth="2">
+              <path d="M3 16l5-6 4 4 5-7 4 5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Visualize pattern
+          </Link>
         </div>
         <div className="flex flex-wrap items-baseline gap-x-3">
           <Mono className={`text-5xl font-bold leading-none ${riskColor(c.fraud_prob)}`}>
@@ -732,49 +715,18 @@ export function CaseDesk() {
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
-      <header className="relative shrink-0 bg-[color:var(--color-header-bg)] text-white">
-        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-4 px-6 py-4">
-          <Link href="/" className="flex items-center gap-3 transition-opacity duration-200 hover:opacity-80">
-            <div className="flex h-9 w-9 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-sm transition-all duration-200">
-              <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5" stroke="currentColor" strokeWidth="2.2">
-                <path d="M3 4h18v4H3zM3 12h12v8H3zM18 12h3v8h-3z" strokeLinejoin="round" />
-              </svg>
-            </div>
-            <div>
-              <div className="flex items-baseline gap-2.5">
-                <h1 className="font-display text-[22px] font-semibold leading-tight tracking-[-0.02em] text-white underline decoration-2 decoration-[#C8503C] underline-offset-4">
-                  Filum
-                </h1>
-                <span className="text-sm text-white/50">Pull the thread.</span>
-              </div>
-              <p className="text-xs leading-tight text-white/60">
-                <Mono>5,000</Mono> real bank transactions · one hidden fraud ring · findings verifiable against the event&rsquo;s answer key
-              </p>
-            </div>
-          </Link>
-
-          <div className="ml-auto flex flex-wrap items-center gap-4">
-            <div className="flex items-center gap-2">
-              <HeaderStatChip label="cases flagged" animate={HEADER_STATS.flagged} />
-              <HeaderStatChip label="exposure" animate={412} prefix="$" suffix="K" />
-              <HeaderStatChip label="ring accounts" animate={HEADER_STATS.ring_accounts} />
-            </div>
-            <button className="rounded-full bg-primary px-7 py-3 text-sm font-bold text-white shadow-md transition-all duration-200 hover:bg-primary-hover hover:shadow-lg hover:-translate-y-px active:translate-y-0">
-              Run analysis
-            </button>
-            <div className="h-7 w-px bg-white/10" aria-hidden />
-            <ThemeToggle />
-            <AccountMenu />
-          </div>
-        </div>
-        <div aria-hidden className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] bg-gradient-to-r from-primary to-transparent" />
-      </header>
-
+      <AppHeader
+        actions={
+          <button className="rounded-full bg-primary px-7 py-3 text-sm font-bold text-white shadow-md transition-all duration-200 hover:bg-primary-hover hover:shadow-lg hover:-translate-y-px active:translate-y-0">
+            Run analysis
+          </button>
+        }
+      />
 
       <main className="mx-auto w-full max-w-[1600px] flex-1 min-h-0 overflow-hidden px-6 py-5">
         <div
           className={`grid h-full min-h-0 grid-cols-1 gap-5 ${
-            queueCollapsed ? "lg:grid-cols-[88px_minmax(0,40fr)_24fr]" : "lg:grid-cols-[36fr_40fr_24fr]"
+            queueCollapsed ? "lg:grid-cols-[88px_minmax(0,52fr)_24fr]" : "lg:grid-cols-[24fr_52fr_24fr]"
           }`}
         >
           {queueCollapsed ? (
@@ -790,7 +742,7 @@ export function CaseDesk() {
               <Mono className="text-xs">{sorted.length}</Mono>
             </button>
           ) : (
-            <section className="flex h-full min-h-0 flex-col rounded-3xl border border-border bg-surface-raised p-6 shadow-sm transition-all duration-200">
+            <section className="flex h-full min-h-0 flex-col rounded-3xl border border-border bg-surface-raised p-4 shadow-sm transition-all duration-200">
               <div className="mb-2 shrink-0 px-1">
                 <SeverityBreakdownCollapsed />
               </div>
@@ -810,7 +762,7 @@ export function CaseDesk() {
                   </button>
                 </div>
               </div>
-              <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1">
+              <div className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto pr-1">
                 {sorted.map((c) => (
                   <CaseCard
                     key={c.id}
