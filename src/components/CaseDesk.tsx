@@ -853,6 +853,165 @@ const clampInt = (v: string, lo: number, hi: number, fallback: number) => {
   return Number.isFinite(n) ? clamp(n, lo, hi) : fallback;
 };
 
+// Normalized inputs for one case, shared by the manual form and the CSV importer.
+interface CaseInput {
+  account_id: string;
+  severity: Severity;
+  exposure: number;
+  reason: string;
+  recommended_action?: string;
+  action_reason?: string;
+  evaded_rule?: string;
+  fraud_prob: number;
+  evidence: string[];
+  triggered_rules: string[];
+  sla_hours: number;
+  counterparty?: string;
+}
+
+// Turn normalized inputs into a queue-ready case + its synthesized dossier/reasoning.
+function buildCase(input: CaseInput, id: string, stamp: string): NewCasePayload {
+  const prob = clamp(Math.round(input.fraud_prob), 0, 100);
+  const exposure = Math.max(0, Math.round(input.exposure) || 0);
+  const evidence = input.evidence.filter(Boolean);
+  const caseData: Case = {
+    id,
+    account_id: input.account_id,
+    severity: input.severity,
+    exposure,
+    reason: input.reason || "Imported case — no description provided.",
+    evidence: evidence.length ? evidence : ["Imported case — no structured evidence attached yet."],
+    evaded_rule: input.evaded_rule || "none specified",
+    fraud_prob: prob,
+    fraud_ci: [clamp(prob - 8, 0, 100), clamp(prob + 6, 0, 100)],
+    recommended_action: input.recommended_action || "Flag for manual review",
+    action_reason: input.action_reason || "imported case",
+    status: "open",
+  };
+  const extras = synthesizeExtras({
+    account_id: caseData.account_id,
+    exposure,
+    triggered_rules: input.triggered_rules,
+    evaded_rule: caseData.evaded_rule,
+    sla_hours: input.sla_hours,
+    flowCounterparty: input.counterparty,
+    stamp,
+  });
+  return { caseData, extras };
+}
+
+// --- CSV import -----------------------------------------------------------
+// Tiny RFC-4180-ish parser: handles quoted fields, embedded commas/newlines,
+// and "" escapes. Header row drives a flexible column → field mapping.
+
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      row.push(field);
+      field = "";
+    } else if (ch === "\n") {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+    } else if (ch !== "\r") {
+      field += ch;
+    }
+  }
+  if (field !== "" || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows;
+}
+
+const COLUMN_ALIASES: Record<keyof CaseInput, string[]> = {
+  account_id: ["account_id", "account", "acct", "account id"],
+  severity: ["severity", "sev"],
+  exposure: ["exposure", "amount", "amount_at_risk", "exposure_usd", "value"],
+  reason: ["reason", "description", "summary", "desc"],
+  recommended_action: ["recommended_action", "action", "recommendation"],
+  action_reason: ["action_reason", "action_rationale", "rationale"],
+  evaded_rule: ["evaded_rule", "evaded", "evaded rule"],
+  fraud_prob: ["fraud_prob", "risk", "risk_score", "score", "probability", "fraud_probability"],
+  evidence: ["evidence", "exhibits"],
+  triggered_rules: ["triggered_rules", "rules", "triggered"],
+  sla_hours: ["sla_hours", "sla", "deadline_hours"],
+  counterparty: ["counterparty", "flow_counterparty", "beneficiary", "to"],
+};
+
+const parseNum = (s: string, fallback: number) => {
+  const n = parseFloat(s.replace(/[$,\s]/g, ""));
+  return Number.isFinite(n) ? n : fallback;
+};
+// Evidence keeps natural commas; only split on | or ;. Rules also split on commas.
+const splitEvidence = (s: string) => s.split(/[|;]/).map((x) => x.trim()).filter(Boolean);
+const splitRules = (s: string) => s.split(/[|;,]/).map((x) => x.trim()).filter(Boolean);
+
+function normSeverity(v: string, prob: number): Severity {
+  const s = v.trim().toUpperCase();
+  if (s === "CRITICAL" || s === "HIGH" || s === "REVIEW") return s;
+  return prob >= 80 ? "CRITICAL" : prob >= 50 ? "HIGH" : "REVIEW";
+}
+
+// Parse CSV text into normalized case inputs. Rows without an account id are skipped.
+function csvToCaseInputs(text: string): CaseInput[] {
+  const rows = parseCsv(text).filter((r) => r.some((c) => c.trim() !== ""));
+  if (rows.length < 2) return [];
+  const header = rows[0].map((h) => h.trim().toLowerCase());
+  const col = {} as Partial<Record<keyof CaseInput, number>>;
+  header.forEach((h, i) => {
+    (Object.keys(COLUMN_ALIASES) as (keyof CaseInput)[]).forEach((field) => {
+      if (col[field] === undefined && COLUMN_ALIASES[field].includes(h)) col[field] = i;
+    });
+  });
+  const get = (row: string[], field: keyof CaseInput) => {
+    const i = col[field];
+    return i === undefined ? "" : (row[i] ?? "").trim();
+  };
+
+  const inputs: CaseInput[] = [];
+  for (let r = 1; r < rows.length; r++) {
+    const row = rows[r];
+    const account_id = get(row, "account_id");
+    if (!account_id) continue;
+    const prob = parseNum(get(row, "fraud_prob"), 60);
+    inputs.push({
+      account_id,
+      severity: normSeverity(get(row, "severity"), prob),
+      exposure: parseNum(get(row, "exposure"), 0),
+      reason: get(row, "reason"),
+      recommended_action: get(row, "recommended_action") || undefined,
+      action_reason: get(row, "action_reason") || undefined,
+      evaded_rule: get(row, "evaded_rule") || undefined,
+      fraud_prob: prob,
+      evidence: splitEvidence(get(row, "evidence")),
+      triggered_rules: splitRules(get(row, "triggered_rules")),
+      sla_hours: Math.round(parseNum(get(row, "sla_hours"), 48)),
+      counterparty: get(row, "counterparty") || undefined,
+    });
+  }
+  return inputs;
+}
+
 function Field({
   label,
   hint,
@@ -911,44 +1070,21 @@ function AddCaseDialog({
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!valid) return;
-    const id = nextId();
-    const prob = clampInt(form.fraud_prob, 0, 100, 60);
-    const exposure = Math.max(0, parseInt(form.exposure, 10) || 0);
-    const evidence = form.evidence
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const triggered = form.triggered_rules
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    const caseData: Case = {
-      id,
+    const input: CaseInput = {
       account_id: form.account_id.trim(),
       severity: form.severity,
-      exposure,
+      exposure: Math.max(0, parseInt(form.exposure, 10) || 0),
       reason: form.reason.trim(),
-      evidence: evidence.length ? evidence : ["Manually entered case — no structured evidence attached yet."],
-      evaded_rule: form.evaded_rule.trim() || "none specified",
-      fraud_prob: prob,
-      fraud_ci: [clamp(prob - 8, 0, 100), clamp(prob + 6, 0, 100)],
-      recommended_action: form.recommended_action.trim() || "Flag for manual review",
+      recommended_action: form.recommended_action.trim() || undefined,
       action_reason: form.action_reason.trim() || "analyst-created case",
-      status: "open",
-    };
-
-    const extras = synthesizeExtras({
-      account_id: caseData.account_id,
-      exposure,
-      triggered_rules: triggered,
-      evaded_rule: caseData.evaded_rule,
+      evaded_rule: form.evaded_rule.trim() || undefined,
+      fraud_prob: clampInt(form.fraud_prob, 0, 100, 60),
+      evidence: form.evidence.split("\n").map((s) => s.trim()).filter(Boolean),
+      triggered_rules: form.triggered_rules.split(",").map((s) => s.trim()).filter(Boolean),
       sla_hours: clampInt(form.sla_hours, 1, 999, 48),
-      flowCounterparty: form.counterparty.trim() || undefined,
-      stamp: nowStamp(),
-    });
-
-    onCreate({ caseData, extras });
+      counterparty: form.counterparty.trim() || undefined,
+    };
+    onCreate(buildCase(input, nextId(), nowStamp()));
     reset();
     onOpenChange(false);
   };
@@ -1134,7 +1270,16 @@ export function CaseDesk() {
   // Per-case dossier extras, seeded from the static map and extended for new cases.
   const [extrasMap, setExtrasMap] = useState<Record<string, CaseExtras>>({ ...CASE_EXTRAS });
   const [addOpen, setAddOpen] = useState(false);
+  const [importMsg, setImportMsg] = useState<string | null>(null);
   const idCounter = useRef(CASES.length);
+  const csvInputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-dismiss the import toast.
+  useEffect(() => {
+    if (!importMsg) return;
+    const t = setTimeout(() => setImportMsg(null), 4500);
+    return () => clearTimeout(t);
+  }, [importMsg]);
 
   const sorted = useMemo(() => sortQueue(cases), [cases]);
   const [selectedId, setSelectedId] = useState(sorted[0]?.id);
@@ -1167,11 +1312,56 @@ export function CaseDesk() {
     if (id === selectedId) setSelectedId(next[0]?.id);
   };
 
+  // Bulk-add parsed CSV rows to the queue in one batch.
+  const handleImportCsv = (inputs: CaseInput[]) => {
+    if (!inputs.length) return;
+    const stamp = nowStamp();
+    const payloads = inputs.map((inp) => buildCase(inp, nextId(), stamp));
+    setExtrasMap((m) => {
+      const next = { ...m };
+      for (const p of payloads) next[p.caseData.id] = p.extras;
+      return next;
+    });
+    setCases((prev) =>
+      sortQueue([...prev, ...payloads.map((p) => ({ ...p.caseData, triage: "OPEN" as Triage }))]),
+    );
+    setSelectedId(payloads[0].caseData.id);
+  };
+
+  // Read a chosen .csv file, parse it, and import. Runs entirely client-side.
+  const onCsvFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const inputs = csvToCaseInputs(String(reader.result ?? ""));
+      if (!inputs.length) {
+        setImportMsg(`No valid rows found in ${file.name} — need a header row with an account column.`);
+        return;
+      }
+      handleImportCsv(inputs);
+      setImportMsg(`Imported ${inputs.length} case${inputs.length > 1 ? "s" : ""} from ${file.name}`);
+    };
+    reader.onerror = () => setImportMsg(`Could not read ${file.name}.`);
+    reader.readAsText(file);
+  };
+
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
       <AppHeader
         actions={
           <>
+            <button
+              onClick={() => csvInputRef.current?.click()}
+              title="Upload a CSV of cases. Header row with columns like: account_id, severity, exposure, reason, fraud_prob, evaded_rule, triggered_rules, evidence, recommended_action, sla_hours"
+              className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-5 py-3 text-sm font-bold text-white shadow-sm transition-all duration-200 hover:bg-white/20 hover:-translate-y-px active:translate-y-0"
+            >
+              <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" stroke="currentColor" strokeWidth="2.2">
+                <path d="M12 16V4m0 0L7 9m5-5l5 5M5 20h14" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              Upload CSV
+            </button>
             <button
               onClick={() => setAddOpen(true)}
               className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-5 py-3 text-sm font-bold text-white shadow-sm transition-all duration-200 hover:bg-white/20 hover:-translate-y-px active:translate-y-0"
@@ -1188,7 +1378,28 @@ export function CaseDesk() {
         }
       />
 
+      <input
+        ref={csvInputRef}
+        type="file"
+        accept=".csv,text/csv"
+        onChange={onCsvFile}
+        className="hidden"
+        aria-hidden
+      />
+
       <AddCaseDialog open={addOpen} onOpenChange={setAddOpen} onCreate={handleCreate} nextId={nextId} />
+
+      {importMsg && (
+        <div
+          role="status"
+          className="fixed bottom-5 right-5 z-50 max-w-sm rounded-2xl border border-border bg-surface px-4 py-3 text-sm text-foreground shadow-lg"
+        >
+          <span className="flex items-start gap-2">
+            <ThreadGlyph className="mt-0.5 h-4 w-4 shrink-0 text-severity-high" />
+            <span>{importMsg}</span>
+          </span>
+        </div>
+      )}
 
       <main className="mx-auto w-full max-w-[1600px] flex-1 min-h-0 overflow-hidden px-6 py-5">
         <div
