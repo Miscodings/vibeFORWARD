@@ -100,12 +100,18 @@ class StructuringDetector(Detector):
             n_txns = len(acct_rows)
             mean_amt = acct_rows["amount"].mean()
 
-            score_raw = min((total_inflow / threshold) * 50 + (acct_rows["frac_just_below"].mean() * 50), 100)
-            score = round(score_raw, 2)
+            # Each component is capped at 50 so the breakdown always sums to the
+            # score (which is itself capped at 100). Capping per-component instead
+            # of only the joint sum keeps score_breakdown == score; otherwise a
+            # large inflow makes the breakdown undercount and Finding.__post_init__
+            # would reject the finding.
+            inflow_pts = round(min((total_inflow / threshold) * 50, 50), 2)
+            just_below_pts = round(min(acct_rows["frac_just_below"].mean() * 50, 50), 2)
             bd = {
-                "inflow_ratio": round(min((total_inflow / threshold) * 50, 50), 2),
-                "just_below_frac": round(acct_rows["frac_just_below"].mean() * 50, 2),
+                "inflow_ratio": inflow_pts,
+                "just_below_frac": just_below_pts,
             }
+            score = round(min(inflow_pts + just_below_pts, 100), 2)
             action = Finding.action_for(score)
             rules_fired = int((acct_rows["amount"] >= threshold * 0.9).sum())
 

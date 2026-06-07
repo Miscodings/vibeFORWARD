@@ -108,8 +108,12 @@ class MemoryStore:
       columns:{pattern_name}
     """
 
-    def __init__(self, force_local: bool | None = None):
+    def __init__(self, force_local: bool | None = None, db_path: str | None = None):
         use_local = _USE_LOCAL if force_local is None else force_local
+        # Resolve the DB path at construction time so tests (and runtime env
+        # changes) can point the store at an isolated file. Precedence:
+        #   explicit db_path arg > MEMORY_DB_PATH env > module default.
+        resolved_db_path = db_path or os.getenv("MEMORY_DB_PATH") or _DB_PATH
         if not use_local:
             try:
                 self._backend: _SQLiteBackend | _CogneeBackend = _CogneeBackend()
@@ -119,7 +123,7 @@ class MemoryStore:
                 use_local = True
 
         if use_local or not hasattr(self, "_backend"):
-            self._backend = _SQLiteBackend(_DB_PATH)
+            self._backend = _SQLiteBackend(resolved_db_path)
 
     def get(self, key: str) -> Any | None:
         return self._backend.get(key)

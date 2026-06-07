@@ -12,6 +12,7 @@ import {
   type CaseStatus,
 } from "@/lib/cases-extras";
 import { buildReasoning, synthesizeExtras, type ScoreFactor } from "@/lib/case-reasoning";
+import { csvToCaseInputs, type CaseInput } from "@/lib/csv-import";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -861,22 +862,6 @@ const clampInt = (v: string, lo: number, hi: number, fallback: number) => {
   return Number.isFinite(n) ? clamp(n, lo, hi) : fallback;
 };
 
-// Normalized inputs for one case, shared by the manual form and the CSV importer.
-interface CaseInput {
-  account_id: string;
-  severity: Severity;
-  exposure: number;
-  reason: string;
-  recommended_action?: string;
-  action_reason?: string;
-  evaded_rule?: string;
-  fraud_prob: number;
-  evidence: string[];
-  triggered_rules: string[];
-  sla_hours: number;
-  counterparty?: string;
-}
-
 // Turn normalized inputs into a queue-ready case + its synthesized dossier/reasoning.
 function buildCase(input: CaseInput, id: string, stamp: string): NewCasePayload {
   const prob = clamp(Math.round(input.fraud_prob), 0, 100);
@@ -906,118 +891,6 @@ function buildCase(input: CaseInput, id: string, stamp: string): NewCasePayload 
     stamp,
   });
   return { caseData, extras };
-}
-
-// --- CSV import -----------------------------------------------------------
-// Tiny RFC-4180-ish parser: handles quoted fields, embedded commas/newlines,
-// and "" escapes. Header row drives a flexible column → field mapping.
-
-function parseCsv(text: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let field = "";
-  let inQuotes = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (text[i + 1] === '"') {
-          field += '"';
-          i++;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        field += ch;
-      }
-    } else if (ch === '"') {
-      inQuotes = true;
-    } else if (ch === ",") {
-      row.push(field);
-      field = "";
-    } else if (ch === "\n") {
-      row.push(field);
-      rows.push(row);
-      row = [];
-      field = "";
-    } else if (ch !== "\r") {
-      field += ch;
-    }
-  }
-  if (field !== "" || row.length > 0) {
-    row.push(field);
-    rows.push(row);
-  }
-  return rows;
-}
-
-const COLUMN_ALIASES: Record<keyof CaseInput, string[]> = {
-  account_id: ["account_id", "account", "acct", "account id"],
-  severity: ["severity", "sev"],
-  exposure: ["exposure", "amount", "amount_at_risk", "exposure_usd", "value"],
-  reason: ["reason", "description", "summary", "desc"],
-  recommended_action: ["recommended_action", "action", "recommendation"],
-  action_reason: ["action_reason", "action_rationale", "rationale"],
-  evaded_rule: ["evaded_rule", "evaded", "evaded rule"],
-  fraud_prob: ["fraud_prob", "risk", "risk_score", "score", "probability", "fraud_probability"],
-  evidence: ["evidence", "exhibits"],
-  triggered_rules: ["triggered_rules", "rules", "triggered"],
-  sla_hours: ["sla_hours", "sla", "deadline_hours"],
-  counterparty: ["counterparty", "flow_counterparty", "beneficiary", "to"],
-};
-
-const parseNum = (s: string, fallback: number) => {
-  const n = parseFloat(s.replace(/[$,\s]/g, ""));
-  return Number.isFinite(n) ? n : fallback;
-};
-// Evidence keeps natural commas; only split on | or ;. Rules also split on commas.
-const splitEvidence = (s: string) => s.split(/[|;]/).map((x) => x.trim()).filter(Boolean);
-const splitRules = (s: string) => s.split(/[|;,]/).map((x) => x.trim()).filter(Boolean);
-
-function normSeverity(v: string, prob: number): Severity {
-  const s = v.trim().toUpperCase();
-  if (s === "CRITICAL" || s === "HIGH" || s === "REVIEW") return s;
-  return prob >= 80 ? "CRITICAL" : prob >= 50 ? "HIGH" : "REVIEW";
-}
-
-// Parse CSV text into normalized case inputs. Rows without an account id are skipped.
-function csvToCaseInputs(text: string): CaseInput[] {
-  const rows = parseCsv(text).filter((r) => r.some((c) => c.trim() !== ""));
-  if (rows.length < 2) return [];
-  const header = rows[0].map((h) => h.trim().toLowerCase());
-  const col = {} as Partial<Record<keyof CaseInput, number>>;
-  header.forEach((h, i) => {
-    (Object.keys(COLUMN_ALIASES) as (keyof CaseInput)[]).forEach((field) => {
-      if (col[field] === undefined && COLUMN_ALIASES[field].includes(h)) col[field] = i;
-    });
-  });
-  const get = (row: string[], field: keyof CaseInput) => {
-    const i = col[field];
-    return i === undefined ? "" : (row[i] ?? "").trim();
-  };
-
-  const inputs: CaseInput[] = [];
-  for (let r = 1; r < rows.length; r++) {
-    const row = rows[r];
-    const account_id = get(row, "account_id");
-    if (!account_id) continue;
-    const prob = parseNum(get(row, "fraud_prob"), 60);
-    inputs.push({
-      account_id,
-      severity: normSeverity(get(row, "severity"), prob),
-      exposure: parseNum(get(row, "exposure"), 0),
-      reason: get(row, "reason"),
-      recommended_action: get(row, "recommended_action") || undefined,
-      action_reason: get(row, "action_reason") || undefined,
-      evaded_rule: get(row, "evaded_rule") || undefined,
-      fraud_prob: prob,
-      evidence: splitEvidence(get(row, "evidence")),
-      triggered_rules: splitRules(get(row, "triggered_rules")),
-      sla_hours: Math.round(parseNum(get(row, "sla_hours"), 48)),
-      counterparty: get(row, "counterparty") || undefined,
-    });
-  }
-  return inputs;
 }
 
 function Field({
@@ -1270,6 +1143,29 @@ function sortQueue(cases: WorkCase[]): WorkCase[] {
   );
 }
 
+// Small pill surfacing backend reachability next to the header actions.
+//  null  → still probing ("Checking…")
+//  true  → reachable ("Backend online")
+//  false → unreachable ("Backend offline")
+function BackendStatusPill({ online }: { online: boolean | null }) {
+  const checking = online === null;
+  const label = checking ? "Checking…" : online ? "Backend online" : "Backend offline";
+  const dotColor = checking
+    ? "bg-white/50"
+    : online
+    ? "bg-[color:var(--stamp-green)]"
+    : "bg-[color:var(--stamp-red)]";
+  return (
+    <span
+      title={label}
+      className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-semibold text-white"
+    >
+      <span className={`inline-block h-2 w-2 rounded-full ${dotColor} ${checking ? "animate-pulse" : ""}`} />
+      {label}
+    </span>
+  );
+}
+
 export function CaseDesk() {
   // Live queue state, seeded from the static dataset.
   const [cases, setCases] = useState<WorkCase[]>(() =>
@@ -1285,10 +1181,46 @@ export function CaseDesk() {
   const idCounter = useRef(CASES.length);
   const csvInputRef = useRef<HTMLInputElement>(null);
 
-  // Probe backend once on mount.
-  useEffect(() => {
-    healthCheck().then(setBackendOnline);
+  // Load backend findings into the queue (merging with existing cases).
+  const loadFromBackend = useCallback(async (findings: import("@/lib/api-client").BackendFinding[]) => {
+    if (!findings.length) return 0;
+    const newCases: WorkCase[] = findings.map((f) => ({
+      ...findingToCase(f),
+      triage: "OPEN" as Triage,
+      backend_cluster_id: f.cluster_id,
+    }));
+    const newExtras: Record<string, CaseExtras> = {};
+    findings.forEach((f) => { newExtras[f.cluster_id] = findingToExtras(f); });
+
+    setCases((prev) => {
+      // Replace any case whose id matches a backend cluster_id; add the rest.
+      const existingIds = new Set(findings.map((f) => f.cluster_id));
+      const kept = prev.filter((c) => !existingIds.has(c.id));
+      return sortQueue([...kept, ...newCases]);
+    });
+    setExtrasMap((m) => ({ ...m, ...newExtras }));
+    if (newCases[0]) setSelectedId(newCases[0].id);
+    return findings.length;
   }, []);
+
+  // Probe backend once on mount; if it's online, auto-load the live queue so
+  // the backend findings appear without a manual "Run analysis" click. Mock
+  // data stays as the fallback when the backend is offline or has no findings.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const online = await healthCheck();
+      if (cancelled) return;
+      setBackendOnline(online);
+      if (!online) return;
+      const findings = await getCases();
+      if (cancelled || !findings.length) return;
+      loadFromBackend(findings);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadFromBackend]);
 
   // Auto-dismiss the import toast.
   useEffect(() => {
@@ -1335,28 +1267,6 @@ export function CaseDesk() {
   };
 
   // ── Backend integration ────────────────────────────────────────────────────
-
-  // Load backend findings into the queue (merging with existing cases).
-  const loadFromBackend = useCallback(async (findings: import("@/lib/api-client").BackendFinding[]) => {
-    if (!findings.length) return 0;
-    const newCases: WorkCase[] = findings.map((f) => ({
-      ...findingToCase(f),
-      triage: "OPEN" as Triage,
-      backend_cluster_id: f.cluster_id,
-    }));
-    const newExtras: Record<string, CaseExtras> = {};
-    findings.forEach((f) => { newExtras[f.cluster_id] = findingToExtras(f); });
-
-    setCases((prev) => {
-      // Replace any case whose id matches a backend cluster_id; add the rest.
-      const existingIds = new Set(findings.map((f) => f.cluster_id));
-      const kept = prev.filter((c) => !existingIds.has(c.id));
-      return sortQueue([...kept, ...newCases]);
-    });
-    setExtrasMap((m) => ({ ...m, ...newExtras }));
-    if (newCases[0]) setSelectedId(newCases[0].id);
-    return findings.length;
-  }, []);
 
   // "Run analysis" — fetch from backend if online, else prompt to start it.
   const handleRunAnalysis = async () => {
@@ -1472,6 +1382,7 @@ export function CaseDesk() {
       <AppHeader
         actions={
           <>
+            <BackendStatusPill online={backendOnline} />
             <button
               onClick={() => csvInputRef.current?.click()}
               title="Upload a CSV of cases. Header row with columns like: account_id, severity, exposure, reason, fraud_prob, evaded_rule, triggered_rules, evidence, recommended_action, sla_hours"

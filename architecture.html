@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VibeForward — Fraud Agent Grid</title>
+<style>
+  :root{
+    --bg:#0d0d0f; --txt:#e8e8ea; --sub:#a8a8b0;
+    --anomaly:#0d5d4e; --updater:#4a3a8c; --explainer:#1a4a7a;
+    --analyst:#2d5a1a; --upload:#3a3a3e; --cognee-b:#7a5e1a; --cognee-f:#2a2310; --meta:#5a1a4a;
+  }
+  *{box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+  body{background:var(--bg);color:var(--txt);margin:0;padding:32px}
+  h1{font-size:19px;font-weight:600;margin:0 0 18px}
+  .band{max-width:1080px;margin:0 auto}
+
+  .box{border-radius:10px;padding:11px 14px;text-align:center;line-height:1.3}
+  .box .t{font-weight:600;font-size:14px}
+  .box .s{font-size:11px;color:#d8d8dc;opacity:.85;margin-top:2px}
+  .upload{background:var(--upload)}.analyst{background:var(--analyst)}
+  .explainer-box{background:var(--explainer)}.meta{background:var(--meta);border:1px dashed #a060a0}
+  .arrow{text-align:center;color:#777;font-size:13px;margin:8px 0}
+
+  .layout{display:grid;grid-template-columns:1fr 190px;gap:16px;align-items:stretch}
+  .grid{display:grid;grid-template-columns:120px repeat(4,1fr);gap:8px}
+  .colhead{font-size:12px;font-weight:600;text-align:center;padding:5px 4px;color:var(--sub);border-bottom:1px solid #2a2a30}
+  .colhead span{font-weight:400;opacity:.65;font-size:9.5px}
+  .colhead.newcol{color:#888;border:1px dashed #555;border-radius:8px}
+  .rowlabel{display:flex;flex-direction:column;justify-content:center;align-items:flex-end;text-align:right;padding-right:8px;font-size:12px;font-weight:600;color:var(--sub)}
+  .rowlabel span{font-weight:400;opacity:.7;font-size:9.5px;margin-top:2px}
+  .cell{border-radius:8px;padding:9px 7px;font-size:11px;text-align:center;line-height:1.3}
+  .cell .ct{font-weight:600;font-size:11px}
+  .cell .cs{font-size:9.5px;opacity:.85;margin-top:2px}
+  .cell.newcell{border:1px dashed #555;background:#1a1a1e;color:#888}
+  .r-anomaly{background:var(--anomaly)}.r-updater{background:var(--updater)}
+  .tag{display:inline-block;background:#3a2a1a;border:1px solid #6e5410;color:#e8c45a;font-size:9.5px;padding:1px 7px;border-radius:20px;margin-top:3px}
+
+  .cognee{background:var(--cognee-f);border:2px dashed var(--cognee-b);border-radius:12px;display:flex;flex-direction:column;justify-content:center;text-align:center;padding:14px}
+  .cognee .t{color:#e8c45a;font-weight:700;font-size:15px}
+  .cognee .s{color:#c8a84a;font-size:10.5px;margin-top:5px;line-height:1.4}
+
+  .detail{background:#16131f;border:1px solid var(--updater);border-radius:12px;padding:14px 16px;margin:16px 0}
+  .detail h2{font-size:13px;margin:0 0 10px;color:#b9a6f0}
+  .detail h2 b{color:#fff}
+  .loop{display:grid;grid-template-columns:repeat(5,1fr);gap:7px}
+  .step{background:#1d1830;border:1px solid #322a52;border-radius:8px;padding:8px;font-size:10px;line-height:1.3}
+  .step b{display:block;color:#cfc2f5;font-size:10.5px;margin-bottom:2px}
+  .code{background:#0e0c16;border:1px solid #2a2440;border-radius:8px;padding:9px 12px;margin-top:11px;font-family:Consolas,monospace;font-size:10.5px;color:#c8c2e0;line-height:1.5;white-space:pre;overflow-x:auto}
+  .code .del{color:#e0788a}.code .add{color:#7fd6a0}.code .cmt{color:#7a7490}
+
+  .feedloop{background:#13180f;border:1px dashed #4a7a2a;border-radius:10px;padding:10px 14px;font-size:12px;color:#bcd6a0;margin-top:8px;line-height:1.4;text-align:center}
+  .feedloop b{color:#cfe8b0}
+  .note{font-size:11px;color:#888;margin-top:12px;line-height:1.45}
+</style>
+</head>
+<body>
+<div class="band">
+  <h1>VibeForward — Self-Tuning Unsupervised Fraud Grid</h1>
+
+  <div class="box upload"><div class="t">Upload spreadsheet</div><div class="s">5,000 transactions · no labels</div></div>
+  <div class="arrow">↓</div>
+
+  <div class="layout">
+    <div class="grid">
+      <div></div>
+      <div class="colhead">Structuring<br><span>sub-threshold</span></div>
+      <div class="colhead">Circular flow<br><span>A→B→C→A</span></div>
+      <div class="colhead">Fan-in / Mules<br><span>many→one</span></div>
+      <div class="colhead newcol">+ NEW<br><span>spawned</span></div>
+
+      <div class="rowlabel">Anomaly Detection<span>score = rank + decision</span></div>
+      <div class="cell r-anomaly"><div class="ct">IsoForest + Benford</div><div class="cs">amounts near $10k</div></div>
+      <div class="cell r-anomaly"><div class="ct">Graph cycle</div><div class="cs">loop tightness</div></div>
+      <div class="cell r-anomaly"><div class="ct">Community + LOF</div><div class="cs">mule collectors</div></div>
+      <div class="cell newcell">spawned</div>
+
+      <div class="rowlabel">Updater agent<span>retunes on every analyst click</span></div>
+      <div class="cell r-updater"><div class="ct">tunes config</div><span class="tag">↺ Approve/Reject</span></div>
+      <div class="cell r-updater"><div class="ct">tunes config</div><span class="tag">↺ Approve/Reject</span></div>
+      <div class="cell r-updater"><div class="ct">tunes config</div><span class="tag">↺ Approve/Reject</span></div>
+      <div class="cell newcell">spawned</div>
+    </div>
+
+    <div class="cognee">
+      <div class="t">Cognee</div>
+      <div class="s">shared memory<br>scores · configs · labels</div>
+    </div>
+  </div>
+
+  <div class="detail">
+    <h2>⚙ Updater agent — driven by the analyst's <b>Approve/Reject</b> clicks (the only labels we get)</h2>
+    <div class="loop">
+      <div class="step"><b>1 · Watch</b>alert-rate, drift, and analyst clicks</div>
+      <div class="step"><b>2 · Diagnose</b>LLM: “rejects = legit payroll, not structuring”</div>
+      <div class="step"><b>3 · Patch</b>edit the config JSON (threshold, features, weights)</div>
+      <div class="step"><b>4 · Gate</b>keep alerts in capacity · ≥20 labels · no thrash</div>
+      <div class="step"><b>5 · Log</b>version {old,new,why} → Cognee</div>
+    </div>
+    <div class="code"><span class="cmt"># after 50 analyst clicks</span>
+<span class="del">  "contamination": 0.010,</span>            <span class="cmt"># alerts 18% → too loose</span>
+<span class="add">  "contamination": 0.006,</span>
+<span class="add">  "exclude": [{"sender_type":"payroll"}],</span> <span class="cmt"># 7/10 rejects were salaries</span></div>
+  </div>
+
+  <div class="arrow">↓</div>
+  <div class="box explainer-box"><div class="t">Explainer · the only one</div><div class="s">reads all scores + configs from Cognee → one sign-ready, downloadable SAR (Geodo adds reg context)</div></div>
+
+  <div class="arrow">↓ parallel ↓</div>
+  <div class="layout">
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div class="box analyst"><div class="t">Analyst · case queue</div><div class="s">verdict in 3 min · <b>Approve / Reject</b> · download SAR</div></div>
+      <div class="box meta"><div class="t">Agent 0 · Pattern Discovery</div><div class="s">finds txns no detector explained → spawns a new column</div></div>
+    </div>
+    <div class="cognee" style="border-style:dashed"><div class="t" style="font-size:13px">↕ Cognee</div><div class="s">both run in parallel on shared memory</div></div>
+  </div>
+
+  <div class="feedloop">↺ <b>Approve/Reject → Cognee → Updater retunes → sharper next batch.</b> The system bootstraps its own labels from the analyst's normal work.</div>
+
+  <div class="note"><b>No Ranker, no Decider:</b> the anomaly score already ranks (sort) and decides (vs threshold). The intelligence is the Updater + the single Explainer. · Tools: LingCode · Cognee · Geodo · Trupeer · (Kaggle answer-key check · PyMC confidence %).</div>
+</div>
+</body>
+</html>

@@ -1,5 +1,23 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+## Run the app (frontend + backend)
+
+This repo is a two-process app: a Next.js frontend (this directory) and a
+FastAPI backend (`underwire/`). To start **both** with one command, see
+[`RUN.md`](./RUN.md). Quick start:
+
+```bash
+docker compose up --build      # recommended (containers ship Node 20)
+# or, locally:
+./scripts/dev-all.ps1          # Windows / PowerShell
+./scripts/dev-all.sh           # macOS / Linux / Git-Bash
+```
+
+Frontend: http://localhost:3000 · Backend docs: http://localhost:8000/docs
+
+> Note: the local frontend needs **Node >= 20.9** (Next 16 requirement). On
+> Node 18 use the Docker path. See [`RUN.md`](./RUN.md) for details.
+
 ## Getting Started
 
 First, run the development server:

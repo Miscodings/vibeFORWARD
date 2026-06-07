@@ -1,0 +1,43 @@
+# vibeFORWARD — one command to run both services:
+#   docker compose up --build
+#
+#   web : Next.js frontend  -> http://localhost:3000
+#   api : FastAPI backend   -> http://localhost:8000  (docs: /docs)
+#
+# Containers use Node 20 / Python 3.13, so this path works even though the host
+# has Node 18 (which is too old for Next 16).
+
+services:
+  api:
+    build:
+      context: ./underwire
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      # Allow the browser app (served from :3000) to call this API.
+      CORS_ORIGINS: "http://localhost:3000"
+      # Optional — pass through from your shell/.env if you want LLM features.
+      # Leave unset to run in math-only mode (LLM degrades gracefully).
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Baked into the client bundle at build time.
+        NEXT_PUBLIC_API_URL: "http://localhost:8000"
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: "http://localhost:8000"
+    depends_on:
+      api:
+        condition: service_started

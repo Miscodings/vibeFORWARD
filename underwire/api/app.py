@@ -21,6 +21,7 @@ from typing import Literal
 
 import pandas as pd
 from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -51,6 +52,24 @@ app = FastAPI(
     title="Underwire Fraud Detection API",
     description="Self-tuning unsupervised fraud detection. Math detects; LLM explains.",
     version="1.0.0",
+)
+
+# ── CORS ─────────────────────────────────────────────────────────────────────
+# The browser frontend cannot reach the API without this. Origins are read from
+# the CORS_ORIGINS env var (comma-separated), defaulting to localhost:3000.
+_cors_origins = [
+    o.strip()
+    for o in os.getenv(
+        "CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
+    ).split(",")
+    if o.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ── Shared state ───────────────────────────────────────────────────────────────
